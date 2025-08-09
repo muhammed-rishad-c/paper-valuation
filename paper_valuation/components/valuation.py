@@ -138,6 +138,11 @@ def advanced_long_valuation(teacher_key_point:list,student_answer:str,total_ques
             "point_by_point_result":point_by_point_result
         }
         
+def evaluation_short_answer(student_answer:str,teacher_answer:str,max_mark:int,threshold:float=0.55)->float:
+    similarity=short_answer_valuation(student_answer,teacher_answer)
+    final_mark=calculate_marks(similarity,max_mark,threshold)
+    return final_mark
+        
         
 if __name__=="__main__":
     q1_student_correct = "Mitochondria provides the energy for cellular functions."

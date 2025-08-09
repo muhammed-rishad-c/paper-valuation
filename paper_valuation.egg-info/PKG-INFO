@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: paper-valuation
+Version: 0.0.0.0
+Author: muhammed-rishad-c
+Author-email: muhammed.risshad@gmail.com
+Requires-Dist: sentence-transformers
+Requires-Dist: pandas
+Requires-Dist: ipykernel
+Dynamic: author
+Dynamic: author-email
+Dynamic: requires-dist
