@@ -1,4 +1,6 @@
 sentence-transformers
 pandas
 ipykernel
+Flask 
+werkzeug
 -e .

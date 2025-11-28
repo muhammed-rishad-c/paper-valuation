@@ -90,6 +90,7 @@ def smart_paragraph_split(text:str)->list:
         return final_paragraph
     except Exception as e:
         raise CustomException(e,sys)
+    
 
 
 def point_by_point_valuation(teacher_key_point:list,student_answer:str,mark_per_point:float,threshold:float=0.4)->dict:
@@ -153,8 +154,10 @@ def holistic_valuation(student_answer:str,teacher_key_point:list,total_question_
 def advanced_long_valuation(teacher_key_point:list,student_answer:str,total_question_mark:int,holistic_threshold:float=0.35,point_threshold:float=0.4)->dict:
     try:
         logging.info("data are prepared to sent on holistic evalution")
+        
         holistic_result=holistic_valuation(student_answer,teacher_key_point,total_question_mark,holistic_threshold)
         mark_per_point=total_question_mark/len(teacher_key_point)
+        
         logging.info("now data are prepared to sent point evaluation")
         point_by_point_result=point_by_point_valuation(teacher_key_point,student_answer,mark_per_point,point_threshold)
         
