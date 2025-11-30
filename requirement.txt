@@ -3,4 +3,5 @@ pandas
 ipykernel
 Flask 
 werkzeug
+google-cloud-vision
 -e .

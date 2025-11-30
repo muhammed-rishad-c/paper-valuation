@@ -1,5 +1,9 @@
 
+# ADD THIS TEMPORARILY:
+import os
+print(f"DEBUG: Credentials Path is: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
 
+from paper_valuation.api.vision_segmentation import detect_and_segment_image
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import os, sys
@@ -11,7 +15,6 @@ from paper_valuation.exception.custom_exception import CustomException
 
 
 app = Flask(__name__)
-
 
 
 @app.route('/api/evaluate', methods=['POST'])
@@ -35,11 +38,16 @@ def evaluate_paper_endpoint():
         
         print(f"INFO: Successfully received and saved file to {temp_path}", file=sys.stdout)
         
+        recognition_result = detect_and_segment_image(temp_path)
+        logging.info(f"API recognition successful. Sample text: {recognition_result.get('full_text_recognized', 'N/A')[:50]}...")
+        
+        
+        
         
         return jsonify({
-            "status": "Success: File Received and Saved",
-            "message": f"File successfully saved to temporary path: {temp_path}",
-            "original_filename": secure_filename(file.filename)
+            "status": "API Recognition Test Success",
+            "message": "Image processed by Google Vision API. Check 'recognition_result' for extracted text.",
+            "recognition_result": recognition_result
         }), 200
 
     except Exception as e:
