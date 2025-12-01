@@ -6,7 +6,8 @@ import google.auth # REQUIRED for loading credentials from file
 
 # --- FINAL AUTHENTICATION FIX ---
 # The clean, simple path to your key file
-_SERVICE_ACCOUNT_KEY_FILE = r"E:\gk_keys\key.json" 
+_SERVICE_ACCOUNT_KEY_FILE = r"E:\machine learning\project\paper-valuation\api key\key.json"
+
 # ---------------------------------
 
 def get_document_annotation(image_path: str):
