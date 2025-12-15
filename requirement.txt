@@ -4,4 +4,5 @@ ipykernel
 Flask 
 werkzeug
 google-cloud-vision
+wordsegment
 -e .

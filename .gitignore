@@ -2,3 +2,4 @@ venv/
 logs/
 vision-key.json
 api-key/
+.env
