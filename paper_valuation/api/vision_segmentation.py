@@ -1,181 +1,410 @@
-# paper_valuation/api/vision_segmentation.py (Full Code with FINAL Spacing Fix)
-
 from google.cloud import vision
 import google.auth
 import io
 import os
 import re
-
-from wordsegment import load, segment
-load()
+from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 load_dotenv()
+
 # --- Authentication Configuration ---
 _SERVICE_ACCOUNT_KEY_FILE = os.environ.get("SERVICE_ACCOUNT_KEY_FILE")
 
 if not _SERVICE_ACCOUNT_KEY_FILE:
-     raise ValueError("SERVICE_ACCOUNT_KEY_FILE not found. Check if .env is loaded correctly in app.py and variable name is correct.")
+    raise ValueError("SERVICE_ACCOUNT_KEY_FILE not found. Check if .env is loaded correctly.")
 
-# --- Helper Functions for Segmentation ---
-
-def is_question_label(text: str) -> bool:
-    # Pattern: Optional starting letter/symbol (@, Q), followed by one or more digits, 
-    # followed by optional punctuation (: or .).
-    return re.match(r'^[A-Z@]?\s*\d+\s*[:\.]?', text.strip(), re.IGNORECASE) is not None
-
-def extract_block_data(document_annotation) -> list:
-    """Extracts all text blocks (paragraphs) with their bounding box (X and Y coordinates)."""
-    block_data = []
-    
-    for page in document_annotation.pages:
-        for block in page.blocks:
-            for paragraph in block.paragraphs:
-                # Get the full text of the paragraph
-                text = "".join([symbol.text for word in paragraph.words for symbol in word.symbols])
-                
-                # Get the top-left coordinate (normalized to 1000)
-                bbox = [(v.x, v.y) for v in paragraph.bounding_box.vertices]
-                min_x = min(v[0] for v in bbox)
-                min_y = min(v[1] for v in bbox)
-                
-                is_label_block = is_question_label(text.split()[0] if text else "")
-                
-                block_data.append({
-                    'text': text,
-                    'x': min_x,
-                    'y': min_y,
-                    'is_label': is_label_block 
-                })
-    return block_data
-
-def reconstruct_answer_text(block_data_list):
-    """
-    FINAL FIX: Uses the wordsegment library to intelligently split the mashed text 
-    into readable English words.
-    """
-    # 1. Combine all blocks into one giant congested string
-    full_congested_text = "".join(block['text'] for block in block_data_list)
-    
-    # 2. Use wordsegment to split the congested text into a list of valid words
-    # Example: "theanswerofgivenanswer" -> ["the", "answer", "of", "given", "answer"]
-    segmented_words = segment(full_congested_text)
-    
-    # 3. Join the words with spaces for the final clean answer
-    return ' '.join(segmented_words)
-
-# --- Main API Caller ---
 
 def get_document_annotation(image_path: str):
-    """Initializes the Vision client and requests full text detection."""
+    """Gets document annotation from Google Vision API."""
     credentials, project_id = google.auth.load_credentials_from_file(_SERVICE_ACCOUNT_KEY_FILE)
     client = vision.ImageAnnotatorClient(credentials=credentials)
+    
     with io.open(image_path, 'rb') as image_file:
         content = image_file.read()
+        
     image = vision.Image(content=content)
     image_context = vision.ImageContext(language_hints=["en-t-i0-handwrit", "en"])
+    
     response = client.document_text_detection(
         image=image,
         image_context=image_context
     )
     return response.full_text_annotation
 
-# --- Main Segmentation Logic (Segment_answers remains unchanged from previous step) ---
 
-def segment_answers(document_annotation) -> dict:
+def is_question_label(text: str) -> Optional[int]:
     """
-    Segments the document into labeled answers based on the vertical split strategy.
-    (This function body is copied from the last fully working version, only 
-     the supporting functions and reconstruct_answer_text are updated).
+    Checks if text is a question label and returns the question number as integer.
+    Returns None if not a label.
+    
+    Matches patterns like: Q1, q1, @1, 1., 1:, Q1:, etc.
     """
-    SPLIT_X = 350
-    block_data = extract_block_data(document_annotation)
+    text = text.strip()
     
-    # --- DEBUGGING OUTPUT (For Console Inspection) ---
-    print("\n--- ALL EXTRACTED BLOCKS (X, Y, is_label, Text) ---")
-    for block in block_data:
-        if block['x'] < 500:
-            print(f"X:{block['x']:<4} | Y:{block['y']:<4} | Label:{block['is_label']:<5} | Text: {block['text'][:50]}")
-    print("----------------------------------------------------\n")
+    # Pattern matches: optional Q/@ + number + optional punctuation
+    patterns = [
+        r'^[Qq@]?\s*(\d+)\s*[:\.\)]\s*',  # Q1:, @1:, 1:, 1., 1)
+        r'^[Qq@](\d+)$',  # Q1, @1 (exact match)
+        r'^(\d+)$',  # Just a number at start of line (risky but sometimes needed)
+    ]
     
-    # 2. Identify Question Boundaries (Labels on the LEFT side)
-    question_boundaries = []
+    for pattern in patterns:
+        match = re.match(pattern, text)
+        if match:
+            return int(match.group(1))
     
-    for block in block_data:
-        if block['is_label'] and block['x'] < SPLIT_X:
-            match = re.search(r'(\d+)', block['text'].split()[0])
-            if match:
-                clean_label = 'Q' + match.group(1).strip()
-            else:
-                continue 
-            question_boundaries.append({
-                'label': clean_label,
-                'y_start': block['y']
+    return None
+
+
+def extract_word_level_data(document_annotation) -> List[Dict]:
+    """
+    Extracts words with their positions and spacing information.
+    """
+    word_data = []
+    
+    for page in document_annotation.pages:
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                for word in paragraph.words:
+                    text = "".join([symbol.text for symbol in word.symbols])
+                    
+                    bbox = [(v.x, v.y) for v in word.bounding_box.vertices]
+                    min_x = min(v[0] for v in bbox)
+                    min_y = min(v[1] for v in bbox)
+                    max_x = max(v[0] for v in bbox)
+                    max_y = max(v[1] for v in bbox)
+                    
+                    last_symbol = word.symbols[-1]
+                    has_space_after = last_symbol.property.detected_break.type_ in [
+                        vision.TextAnnotation.DetectedBreak.BreakType.SPACE,
+                        vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE,
+                        vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK
+                    ]
+                    
+                    word_data.append({
+                        'text': text,
+                        'x': min_x,
+                        'y': min_y,
+                        'max_x': max_x,
+                        'max_y': max_y,
+                        'has_space_after': has_space_after
+                    })
+    
+    return word_data
+
+
+def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int = 400) -> List[Dict]:
+    """
+    Automatically finds ALL question labels in the document.
+    
+    Strategy:
+    1. Scan all words on the left margin
+    2. Check each for question label pattern
+    3. Sort by Y position (top to bottom)
+    4. Return all found labels
+    """
+    found_labels = []
+    
+    for i, word in enumerate(word_data):
+        # Only consider words on the left margin
+        if word['x'] > left_margin_threshold:
+            continue
+        
+        # Check if this matches a question label pattern
+        q_num = is_question_label(word['text'])
+        
+        if q_num is not None:
+            found_labels.append({
+                'label': f'Q{q_num}',
+                'q_number': q_num,
+                'y_start': word['y'],
+                'x_start': word['x'],
+                'word_index': i,
+                'raw_text': word['text']
             })
-            
-    question_boundaries.sort(key=lambda x: x['y_start'])
     
-    # --- Q1 FORGIVENESS FIX ---
-    if not any(qb['label'].upper() == 'Q1' for qb in question_boundaries) and block_data:
-        first_block_on_left = min((b for b in block_data if b['x'] < SPLIT_X), 
-                                  key=lambda x: x['y'], default=None)
-        if first_block_on_left and (not question_boundaries or first_block_on_left['y'] < question_boundaries[0]['y_start']):
-            question_boundaries.insert(0, {
-                'label': 'Q1',
-                'y_start': first_block_on_left['y']
-            })
-    # ----------------------------
-
-    # --- DEBUGGING OUTPUT ---
-    print("\n--- IDENTIFIED QUESTION BOUNDARIES ---")
-    for qb in question_boundaries:
-        print(f"Label: {qb['label']:<5} | Y-Start: {qb['y_start']}")
-    print("--------------------------------------\n")
-
-    # 3. Group Answer Text based on Vertical Bands
-    segmented_answers = {}
+    # Sort by Y position (top to bottom) to maintain visual order
+    found_labels.sort(key=lambda x: x['y_start'])
     
-    for i, q_boundary in enumerate(question_boundaries):
+    return found_labels
+
+
+def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expected_questions: List[int] = None) -> Tuple[bool, List[int], List[str], Dict]:
+    """
+    Validates if all expected questions are present (order doesn't matter).
+    
+    Args:
+        boundaries: List of detected question boundaries
+        strict: If True, requires Q1 to be present; if False, accepts any range
+        expected_questions: List of expected question numbers (e.g., [1,2,3,4,5])
+                          If None, assumes sequential from min to max
+    
+    Returns:
+        Tuple of (is_valid, missing_numbers, warnings, info)
+        - is_valid: True if all expected questions found
+        - missing_numbers: List of missing question numbers
+        - warnings: List of warning messages
+        - info: Dictionary with additional information
+    """
+    if not boundaries:
+        return False, [], ["❌ No questions detected in the document!"], {}
+    
+    # Get all detected question numbers
+    q_numbers = [b['q_number'] for b in boundaries]
+    found_set = set(q_numbers)
+    q_numbers_sorted = sorted(q_numbers)
+    
+    min_q = min(q_numbers)
+    max_q = max(q_numbers)
+    
+    # Determine expected questions
+    if expected_questions is not None:
+        expected_set = set(expected_questions)
+    else:
+        # If not specified, expect all questions from min to max
+        expected_set = set(range(min_q, max_q + 1))
+    
+    # Find missing and extra questions
+    missing = sorted(expected_set - found_set)
+    extra = sorted(found_set - expected_set) if expected_questions else []
+    
+    warnings = []
+    info = {
+        'found_questions': q_numbers_sorted,
+        'writing_order': q_numbers,  # Order they appear on page (top to bottom)
+        'out_of_order': q_numbers != q_numbers_sorted,
+        'has_duplicates': len(q_numbers) != len(found_set),
+        'min_question': min_q,
+        'max_question': max_q
+    }
+    
+    # Check if Q1 is present
+    if 1 not in found_set:
+        if strict:
+            warnings.append(f"⚠️  Q1 not found. Document starts from Q{min_q}.")
+        else:
+            warnings.append(f"ℹ️  Document starts from Q{min_q} (continuation sheet)")
+    
+    # Check for missing questions
+    if missing:
+        warnings.append(f"❌ Missing questions: {', '.join([f'Q{m}' for m in missing])}")
+    
+    # Check for extra unexpected questions
+    if extra and expected_questions is not None:
+        warnings.append(f"ℹ️  Found unexpected questions: {', '.join([f'Q{e}' for e in extra])}")
+    
+    # Check for duplicates
+    if info['has_duplicates']:
+        duplicates = [n for n in found_set if q_numbers.count(n) > 1]
+        warnings.append(f"⚠️  Duplicate labels detected: {', '.join([f'Q{d}' for d in duplicates])}")
+    
+    # Info about writing order (NOT a warning - this is OK!)
+    if info['out_of_order']:
+        warnings.append(f"ℹ️  Questions written in non-sequential order: {' → '.join([f'Q{n}' for n in q_numbers[:5]])}{'...' if len(q_numbers) > 5 else ''}")
+    
+    # Check vertical spacing between questions (based on page position)
+    for i in range(len(boundaries) - 1):
+        spacing = boundaries[i + 1]['y_start'] - boundaries[i]['y_start']
+        if spacing < 30:  # Very close together
+            q1_num = boundaries[i]['q_number']
+            q2_num = boundaries[i + 1]['q_number']
+            warnings.append(f"⚠️  Q{q1_num} and Q{q2_num} are very close (spacing: {spacing}px). Add more space.")
+    
+    # Validation: all expected questions found + no duplicates
+    is_valid = len(missing) == 0 and not info['has_duplicates'] and (1 in found_set or not strict)
+    
+    return is_valid, missing, warnings, info
+
+
+def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
+    """
+    Reconstructs text from word-level data with proper spacing.
+    """
+    if end_idx is None:
+        end_idx = len(words)
+    
+    answer_parts = []
+    
+    for i in range(start_idx, min(end_idx, len(words))):
+        word = words[i]
+        answer_parts.append(word['text'])
         
-        y_start_boundary = q_boundary['y_start']
-        y_end_boundary = question_boundaries[i + 1]['y_start'] if i + 1 < len(question_boundaries) else float('inf')
-
-        answer_blocks = []
-        
-        for block in block_data:
-            if y_start_boundary <= block['y'] < y_end_boundary:
-                
-                if block['is_label'] and block['x'] < SPLIT_X and block['y'] == y_start_boundary:
-                    block_copy = block.copy()
-                    parts = block_copy['text'].split(':', 1)
-                    if len(parts) > 1:
-                        block_copy['text'] = parts[1].strip()
-                    elif len(block_copy['text'].split()) > 1:
-                        block_copy['text'] = ' '.join(block_copy['text'].split()[1:]).strip()
-                    else:
-                        continue 
-                        
-                    answer_blocks.append(block_copy)
-                
-                else:
-                    answer_blocks.append(block)
-        
-        label_key = q_boundary['label']
-        # CALL THE RECONSTRUCTOR HERE:
-        segmented_answers[label_key] = reconstruct_answer_text(answer_blocks)
+        if word['has_space_after'] and i < end_idx - 1:
+            answer_parts.append(' ')
     
-    print("\n--- FINAL SEGMENTATION OUTPUT ---")
-    print(segmented_answers)
-    print("---------------------------------\n")
+    return ''.join(answer_parts).strip()
 
-    return segmented_answers
 
-# --- Main Wrapper Function ---
-
-def detect_and_segment_image(image_path:str)->dict:
-    """Runs OCR and then segments the result for valuation."""
+def clean_answer_text(text: str, q_number: int) -> str:
+    """
+    Removes the question label from the beginning of the answer.
+    """
+    patterns = [
+        rf'^[Qq@]?\s*{q_number}\s*[:\.\)]\s*',
+        rf'^[Qq@]?\s*{q_number}\s+',
+        rf'^{q_number}\s*[:\.\)]\s*',
+    ]
     
+    for pattern in patterns:
+        text = re.sub(pattern, '', text, count=1)
+    
+    return text.strip()
+
+
+def segment_answers(document_annotation, debug: bool = True, config: Dict = None) -> Dict:
+    """
+    Automatically detects and segments all Q&A pairs from the document.
+    Handles questions written in ANY order (Q1, Q3, Q2, Q5, Q4 is OK).
+    """
+    # Default configuration
+    if config is None:
+        config = {}
+    
+    LEFT_MARGIN_THRESHOLD = config.get('left_margin_threshold', 400)
+    MIN_VERTICAL_SPACING = config.get('min_vertical_spacing', 30)
+    STRICT_VALIDATION = config.get('strict_validation', True)
+    EXPECTED_QUESTIONS = config.get('expected_questions', None)
+    
+    # Step 1: Extract words
+    word_data = extract_word_level_data(document_annotation)
+    
+    if debug:
+        print(f"\n{'='*70}")
+        print(f"📄 DOCUMENT ANALYSIS - Extracted {len(word_data)} words")
+        print(f"{'='*70}")
+    
+    # Step 2: Auto-detect ALL question labels
+    boundaries = find_all_question_labels(word_data, LEFT_MARGIN_THRESHOLD)
+    
+    if debug:
+        print(f"\n🔍 QUESTION DETECTION:")
+        if boundaries:
+            print(f"   Found {len(boundaries)} question label(s):")
+            for b in boundaries:
+                print(f"      • {b['label']} at Y={b['y_start']}, X={b['x_start']} (word #{b['word_index']})")
+        else:
+            print("   ❌ No question labels detected!")
+    
+    # Step 3: Validate completeness - NOW RETURNS 4 VALUES
+    is_valid, missing, warnings, validation_info = validate_question_sequence(
+        boundaries, 
+        strict=STRICT_VALIDATION,
+        expected_questions=EXPECTED_QUESTIONS
+    )
+    
+    if debug:
+        print(f"\n✓ VALIDATION:")
+        found_q = validation_info.get('found_questions', [])
+        if found_q:
+            print(f"   Questions Found: {', '.join([f'Q{q}' for q in found_q])}")
+        
+        if validation_info.get('out_of_order'):
+            writing_order = validation_info.get('writing_order', [])
+            print(f"   Writing Order: {' → '.join([f'Q{q}' for q in writing_order[:5]])}")
+        
+        if is_valid:
+            print(f"   ✅ All questions present")
+        
+        for warning in warnings:
+            print(f"   {warning}")
+    
+    # Step 4: Extract answers and SORT by question number
+    segmented_answers_unsorted = {}
+    
+    for i, boundary in enumerate(boundaries):
+        start_idx = boundary['word_index']
+        
+        # Skip the label word itself if it matches
+        if start_idx < len(word_data):
+            if is_question_label(word_data[start_idx]['text']) is not None:
+                start_idx += 1
+        
+        # End is the next question (by page position) or end of document
+        if i + 1 < len(boundaries):
+            end_idx = boundaries[i + 1]['word_index']
+        else:
+            end_idx = len(word_data)
+        
+        # Reconstruct answer
+        answer_text = reconstruct_answer_text(word_data, start_idx, end_idx)
+        answer_text = clean_answer_text(answer_text, boundary['q_number'])
+        
+        segmented_answers_unsorted[boundary['label']] = answer_text
+    
+    # IMPORTANT: Sort answers by question number for final output
+    segmented_answers = dict(sorted(
+        segmented_answers_unsorted.items(),
+        key=lambda x: int(x[0][1:])  # Sort by number in 'Q1', 'Q2', etc.
+    ))
+    
+    if debug:
+        for q_label, answer_text in segmented_answers.items():
+            preview = answer_text[:150] + ('...' if len(answer_text) > 150 else '')
+            print(f"   {q_label}: {preview}")
+    
+    # Step 5: Prepare result with metadata
+    result = {
+        'answers': segmented_answers,
+        'metadata': {
+            'total_questions_found': len(boundaries),
+            'question_numbers': validation_info.get('found_questions', []),
+            'writing_order': validation_info.get('writing_order', []),
+            'out_of_order': validation_info.get('out_of_order', False),
+            'is_complete': is_valid,
+            'missing_questions': missing,
+            'has_duplicates': validation_info.get('has_duplicates', False),
+            'expected_questions': EXPECTED_QUESTIONS
+        },
+        'validation': {
+            'is_valid': is_valid,
+            'warnings': warnings,
+            'info': validation_info
+        }
+    }
+    
+    if debug:
+        print(f"\n{'='*70}")
+        print(f"📊 SUMMARY: Found {len(segmented_answers)} answers")
+        print(f"{'='*70}\n")
+    
+    return result
+
+def detect_and_segment_image(image_path: str, debug: bool = True, config: Dict = None) -> Dict:
+    """
+    Main entry point: OCR + Auto-segmentation with validation.
+    
+    Args:
+        image_path: Path to the answer sheet image
+        debug: Whether to print detailed debug information
+        config: Configuration dictionary:
+            - 'left_margin_threshold': X coordinate for left margin (default: 400)
+              * Increase (500-600) if labels are written further right
+              * Decrease (250-350) if labels are very close to edge
+            - 'min_vertical_spacing': Minimum pixels between questions (default: 30)
+            - 'strict_validation': Require Q1 to start (default: True)
+              * Set to False for continuation sheets
+    
+    Returns:
+        Dictionary containing:
+        - 'answers': {Q1: text, Q2: text, ...}
+        - 'metadata': Information about detection
+        - 'validation': Completeness check results
+        
+    Example:
+        # Standard usage
+        result = detect_and_segment_image("paper.jpg")
+        
+        # For continuation sheets
+        result = detect_and_segment_image("paper2.jpg", 
+                                         config={'strict_validation': False})
+        
+        # Adjust margin detection
+        result = detect_and_segment_image("paper.jpg",
+                                         config={'left_margin_threshold': 500})
+    """
     document_annotation = get_document_annotation(image_path)
-    segmented_data = segment_answers(document_annotation)
-    
-    return segmented_data
+    result = segment_answers(document_annotation, debug=debug, config=config)
+    return result
+
+
