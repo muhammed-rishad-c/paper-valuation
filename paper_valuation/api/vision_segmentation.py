@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 load_dotenv()
 
-# --- Authentication Configuration ---
+
 _SERVICE_ACCOUNT_KEY_FILE = os.environ.get("SERVICE_ACCOUNT_KEY_FILE")
 
 if not _SERVICE_ACCOUNT_KEY_FILE:
@@ -16,7 +16,7 @@ if not _SERVICE_ACCOUNT_KEY_FILE:
 
 
 def get_document_annotation(image_path: str):
-    """Gets document annotation from Google Vision API."""
+    
     credentials, project_id = google.auth.load_credentials_from_file(_SERVICE_ACCOUNT_KEY_FILE)
     client = vision.ImageAnnotatorClient(credentials=credentials)
     
@@ -34,12 +34,7 @@ def get_document_annotation(image_path: str):
 
 
 def is_question_label(text: str) -> Optional[int]:
-    """
-    Checks if text is a question label and returns the question number as integer.
-    Returns None if not a label.
     
-    Matches patterns like: Q1, q1, @1, 1., 1:, Q1:, etc.
-    """
     text = text.strip()
     
     # Pattern matches: optional Q/@ + number + optional punctuation
@@ -58,9 +53,7 @@ def is_question_label(text: str) -> Optional[int]:
 
 
 def extract_word_level_data(document_annotation) -> List[Dict]:
-    """
-    Extracts words with their positions and spacing information.
-    """
+    
     word_data = []
     
     for page in document_annotation.pages:
@@ -95,15 +88,7 @@ def extract_word_level_data(document_annotation) -> List[Dict]:
 
 
 def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int = 400) -> List[Dict]:
-    """
-    Automatically finds ALL question labels in the document.
     
-    Strategy:
-    1. Scan all words on the left margin
-    2. Check each for question label pattern
-    3. Sort by Y position (top to bottom)
-    4. Return all found labels
-    """
     found_labels = []
     
     for i, word in enumerate(word_data):
@@ -131,22 +116,7 @@ def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int =
 
 
 def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expected_questions: List[int] = None) -> Tuple[bool, List[int], List[str], Dict]:
-    """
-    Validates if all expected questions are present (order doesn't matter).
     
-    Args:
-        boundaries: List of detected question boundaries
-        strict: If True, requires Q1 to be present; if False, accepts any range
-        expected_questions: List of expected question numbers (e.g., [1,2,3,4,5])
-                          If None, assumes sequential from min to max
-    
-    Returns:
-        Tuple of (is_valid, missing_numbers, warnings, info)
-        - is_valid: True if all expected questions found
-        - missing_numbers: List of missing question numbers
-        - warnings: List of warning messages
-        - info: Dictionary with additional information
-    """
     if not boundaries:
         return False, [], ["❌ No questions detected in the document!"], {}
     
@@ -371,38 +341,7 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     return result
 
 def detect_and_segment_image(image_path: str, debug: bool = True, config: Dict = None) -> Dict:
-    """
-    Main entry point: OCR + Auto-segmentation with validation.
     
-    Args:
-        image_path: Path to the answer sheet image
-        debug: Whether to print detailed debug information
-        config: Configuration dictionary:
-            - 'left_margin_threshold': X coordinate for left margin (default: 400)
-              * Increase (500-600) if labels are written further right
-              * Decrease (250-350) if labels are very close to edge
-            - 'min_vertical_spacing': Minimum pixels between questions (default: 30)
-            - 'strict_validation': Require Q1 to start (default: True)
-              * Set to False for continuation sheets
-    
-    Returns:
-        Dictionary containing:
-        - 'answers': {Q1: text, Q2: text, ...}
-        - 'metadata': Information about detection
-        - 'validation': Completeness check results
-        
-    Example:
-        # Standard usage
-        result = detect_and_segment_image("paper.jpg")
-        
-        # For continuation sheets
-        result = detect_and_segment_image("paper2.jpg", 
-                                         config={'strict_validation': False})
-        
-        # Adjust margin detection
-        result = detect_and_segment_image("paper.jpg",
-                                         config={'left_margin_threshold': 500})
-    """
     document_annotation = get_document_annotation(image_path)
     result = segment_answers(document_annotation, debug=debug, config=config)
     return result
