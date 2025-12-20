@@ -15,13 +15,19 @@ app = Flask(__name__)
 
 @app.route('/api/evaluate', methods=['POST'])
 def evaluate_paper_endpoint():
-    # 1. Retrieve all images uploaded under 'paper_images' (matching Node.js key)
-    # Ensure this matches the Node.js key 'paper_images'
+    # 1. Retrieve all images uploaded under 'paper_images'
     files = request.files.getlist('paper_images')   
     
     if not files or files[0].filename == '':
         logging.error("No images found in the request.")
         return jsonify({"status": "Failed", "error": "No images provided. Ensure the key is 'paper_images'."}), 400
+
+    # DEBUG: Log the order files are received
+    logging.info("="*70)
+    logging.info("FILES RECEIVED BY FLASK (in order):")
+    for index, file in enumerate(files):
+        logging.info(f"  Page {index + 1}: {file.filename}")
+    logging.info("="*70)
 
     all_pages_result = []
 
@@ -33,10 +39,10 @@ def evaluate_paper_endpoint():
                 file.save(tmp.name)
                 temp_path = tmp.name
             
-            logging.info(f"Processing Page {index + 1}: {temp_path}")
+            logging.info(f"Processing Page {index + 1}: {file.filename} -> {temp_path}")
             
             # 3. Perform OCR and Segmentation on this page
-            page_result = detect_and_segment_image(temp_path)
+            page_result = detect_and_segment_image(temp_path, debug=True)
             all_pages_result.append(page_result)
             
             # 4. Clean up temp file immediately after processing the page
@@ -56,6 +62,8 @@ def evaluate_paper_endpoint():
         error_message = f"Critical System Error: {str(e)}\n{traceback.format_exc()}"
         logging.error(error_message)
         return jsonify({"status": "Failed", "error": str(e)}), 500
+
+
 
 if __name__ == '__main__':
     # Sanity check for environment variables

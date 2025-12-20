@@ -87,8 +87,11 @@ def extract_word_level_data(document_annotation) -> List[Dict]:
     return word_data
 
 
-def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int = 400) -> List[Dict]:
-    
+def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int = 400, max_expected_question: int = 20) -> List[Dict]:
+    """
+    Find all question labels in the document.
+    Filters out unrealistic question numbers to avoid OCR misreads.
+    """
     found_labels = []
     
     for i, word in enumerate(word_data):
@@ -100,6 +103,11 @@ def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int =
         q_num = is_question_label(word['text'])
         
         if q_num is not None:
+            # Filter out unrealistic question numbers
+            if q_num > max_expected_question:
+                print(f"   ⚠️  Ignoring suspicious label: Q{q_num} (likely OCR error)")
+                continue
+                
             found_labels.append({
                 'label': f'Q{q_num}',
                 'q_number': q_num,
@@ -226,6 +234,9 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     """
     Automatically detects and segments all Q&A pairs from the document.
     Handles questions written in ANY order (Q1, Q3, Q2, Q5, Q4 is OK).
+    
+    NEW LOGIC: If a question label appears multiple times (e.g., Q2 on page 1 and Q2 on page 2),
+    the answers will be concatenated during the merge phase.
     """
     # Default configuration
     if config is None:
@@ -233,8 +244,9 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     
     LEFT_MARGIN_THRESHOLD = config.get('left_margin_threshold', 400)
     MIN_VERTICAL_SPACING = config.get('min_vertical_spacing', 30)
-    STRICT_VALIDATION = config.get('strict_validation', True)
+    STRICT_VALIDATION = config.get('strict_validation', False)  # Changed default to False for multi-page
     EXPECTED_QUESTIONS = config.get('expected_questions', None)
+    MAX_EXPECTED_QUESTION = config.get('max_expected_question', 20)
     
     # Step 1: Extract words
     word_data = extract_word_level_data(document_annotation)
@@ -245,7 +257,7 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         print(f"{'='*70}")
     
     # Step 2: Auto-detect ALL question labels
-    boundaries = find_all_question_labels(word_data, LEFT_MARGIN_THRESHOLD)
+    boundaries = find_all_question_labels(word_data, LEFT_MARGIN_THRESHOLD, MAX_EXPECTED_QUESTION)
     
     if debug:
         print(f"\n🔍 QUESTION DETECTION:")
@@ -254,9 +266,9 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
             for b in boundaries:
                 print(f"      • {b['label']} at Y={b['y_start']}, X={b['x_start']} (word #{b['word_index']})")
         else:
-            print("   ❌ No question labels detected!")
+            print("   ❌ No question labels detected on this page!")
     
-    # Step 3: Validate completeness - NOW RETURNS 4 VALUES
+    # Step 3: Validate completeness (relaxed for multi-page)
     is_valid, missing, warnings, validation_info = validate_question_sequence(
         boundaries, 
         strict=STRICT_VALIDATION,
@@ -274,14 +286,29 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
             print(f"   Writing Order: {' → '.join([f'Q{q}' for q in writing_order[:5]])}")
         
         if is_valid:
-            print(f"   ✅ All questions present")
+            print(f"   ✅ All expected questions present on this page")
         
         for warning in warnings:
             print(f"   {warning}")
     
-    # Step 4: Extract answers and SORT by question number
+    # Step 4: Extract answers
     segmented_answers_unsorted = {}
     
+    # NEW LOGIC: We no longer capture "CONTINUATION_FROM_PREVIOUS"
+    # Students MUST label continuation pages with the question number
+    
+    # If NO labels found on this page, treat entire page as unlabeled continuation
+    if not boundaries and word_data:
+        full_text = reconstruct_answer_text(word_data, 0)
+        if full_text.strip():
+            segmented_answers_unsorted['UNLABELED_CONTINUATION'] = full_text
+            if debug:
+                print(f"\n⚠️  UNLABELED PAGE DETECTED:")
+                preview = full_text[:100] + ('...' if len(full_text) > 100 else '')
+                print(f"   This page has no question labels. Text: {preview}")
+                print(f"   ⚠️  Student should write the question number at the top!")
+
+    # Extract labeled answers
     for i, boundary in enumerate(boundaries):
         start_idx = boundary['word_index']
         
@@ -296,19 +323,29 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         else:
             end_idx = len(word_data)
         
-        # Reconstruct answer
+        # Reconstruct and clean answer
         answer_text = reconstruct_answer_text(word_data, start_idx, end_idx)
         answer_text = clean_answer_text(answer_text, boundary['q_number'])
         
         segmented_answers_unsorted[boundary['label']] = answer_text
     
     # IMPORTANT: Sort answers by question number for final output
-    segmented_answers = dict(sorted(
-        segmented_answers_unsorted.items(),
-        key=lambda x: int(x[0][1:])  # Sort by number in 'Q1', 'Q2', etc.
-    ))
+    sorted_keys = sorted(
+        [k for k in segmented_answers_unsorted.keys() if k != 'UNLABELED_CONTINUATION'],
+        key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0
+    )
+    
+    segmented_answers = {}
+    
+    # Add unlabeled continuation first if it exists (will be handled in merge)
+    if 'UNLABELED_CONTINUATION' in segmented_answers_unsorted:
+        segmented_answers['UNLABELED_CONTINUATION'] = segmented_answers_unsorted['UNLABELED_CONTINUATION']
+        
+    for k in sorted_keys:
+        segmented_answers[k] = segmented_answers_unsorted[k]
     
     if debug:
+        print(f"\n📄 EXTRACTED ANSWERS:")
         for q_label, answer_text in segmented_answers.items():
             preview = answer_text[:150] + ('...' if len(answer_text) > 150 else '')
             print(f"   {q_label}: {preview}")
@@ -335,10 +372,11 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     
     if debug:
         print(f"\n{'='*70}")
-        print(f"📊 SUMMARY: Found {len(segmented_answers)} answers")
+        print(f"📊 SUMMARY: Found {len(segmented_answers)} answer parts")
         print(f"{'='*70}\n")
     
     return result
+
 
 def detect_and_segment_image(image_path: str, debug: bool = True, config: Dict = None) -> Dict:
     
