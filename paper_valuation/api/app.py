@@ -5,58 +5,33 @@ import traceback
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 
-# --- Custom Imports ---
-from paper_valuation.api.vision_segmentation import detect_and_segment_image
+
 from paper_valuation.logging.logger import logging
-# Ensure this utility function exists in your paper_valuation/api/utils.py
-from paper_valuation.api.utils import merge_multi_page_result
+from paper_valuation.api.utils import evaluate_paper_individual
 
 app = Flask(__name__)
 
+
+
 @app.route('/api/evaluate', methods=['POST'])
 def evaluate_paper_endpoint():
-    # 1. Retrieve all images uploaded under 'paper_images'
-    files = request.files.getlist('paper_images')   
     
-    if not files or files[0].filename == '':
-        logging.error("No images found in the request.")
-        return jsonify({"status": "Failed", "error": "No images provided. Ensure the key is 'paper_images'."}), 400
-
-    # DEBUG: Log the order files are received
-    logging.info("="*70)
-    logging.info("FILES RECEIVED BY FLASK (in order):")
-    for index, file in enumerate(files):
-        logging.info(f"  Page {index + 1}: {file.filename}")
-    logging.info("="*70)
-
-    all_pages_result = []
-
     try:
-        # 2. Iterate through each page sequentially
-        for index, file in enumerate(files):
-            # Create a unique temp file for each page
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                file.save(tmp.name)
-                temp_path = tmp.name
-            
-            logging.info(f"Processing Page {index + 1}: {file.filename} -> {temp_path}")
-            
-            # 3. Perform OCR and Segmentation on this page
-            page_result = detect_and_segment_image(temp_path, debug=True)
-            all_pages_result.append(page_result)
-            
-            # 4. Clean up temp file immediately after processing the page
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                logging.info(f"Cleaned up Page {index + 1} temp file.")
+        files = request.files.getlist('paper_images')   
+        
+        if not files or files[0].filename == '':
+            logging.error("No images found in the request.")
+            return jsonify({"status": "Failed", "error": "No images provided. Ensure the key is 'paper_images'."}), 400
 
-        # 5. Merge all individual page dictionaries into one complete script
-        final_valuation = merge_multi_page_result(all_pages_result)
-            
-        return jsonify({
-            "status": "Success",
-            "recognition_result": final_valuation
-        }), 200
+        
+        logging.info("="*70)
+        logging.info("FILES RECEIVED BY FLASK (in order):")
+        for index, file in enumerate(files):
+            logging.info(f"  Page {index + 1}: {file.filename}")
+        logging.info("="*70)
+        
+        results=evaluate_paper_individual(files)
+        return results
 
     except Exception as e:
         error_message = f"Critical System Error: {str(e)}\n{traceback.format_exc()}"
@@ -66,7 +41,7 @@ def evaluate_paper_endpoint():
 
 
 if __name__ == '__main__':
-    # Sanity check for environment variables
+
     key_file = os.environ.get('SERVICE_ACCOUNT_KEY_FILE')
     print(f"DEBUG: Using Key File: {key_file}")
     
