@@ -32,13 +32,9 @@ def evaluate_paper_endpoint():
         logging.error(error_message)
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
-# 2. Teacher Series Bundle Route
 @app.route('/api/seriesBundleEvaluate', methods=['POST'])
 def evaluate_series_batch_handler():
-    """
-    Renamed to evaluate_series_batch_handler to prevent 
-    collision with the utility function.
-    """
+    
     try:
         # Match keys sent from Node.js controller
         id_file = request.files.get('identity_page')
@@ -61,4 +57,4 @@ if __name__ == '__main__':
     key_file = os.environ.get('SERVICE_ACCOUNT_KEY_FILE')
     print(f"DEBUG: Using Key File: {key_file}")
     print("Starting Flask Paper Valuation Service on port 5000...")
-    app.run(port=5000, debug=True, use_reloader=False)
+    app.run(port=5000, debug=True, use_reloader=True)

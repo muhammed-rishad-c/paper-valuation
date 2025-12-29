@@ -74,8 +74,53 @@ def evaluate_paper_individual(files):
         logging.error(e)
         return jsonify({"status": "Failed", "error": str(e)}), 500
     
+
+
+def clean_student_data(raw_value, field_type):
+    """
+    Cleans OCR noise and recovers misread handwritten characters.
+    """
+    if not raw_value or raw_value == "Unknown":
+        return "Unknown"
+
+    # Standardize to uppercase and trim whitespace
+    clean_val = raw_value.strip().upper()
+
+    if field_type == "roll_no":
+        # Character recovery map for numeric fields
+        replacements = {
+            'O': '0', 'D': '0', 'Q': '0', 
+            'I': '1', 'L': '1', 
+            'S': '5', 'G': '6', 'B': '8',
+            'Z': '2'
+        }
+        for char, digit in replacements.items():
+            clean_val = clean_val.replace(char, digit)
+        
+        # Extract only the digits found after character recovery
+        digits = re.findall(r'\d+', clean_val)
+        return "".join(digits) if digits else "Unknown"
+
+    if field_type == "class":
+        # Force the 'S' prefix and handle misread '5' as 'S'
+        digits_match = re.search(r'\d+', clean_val)
+        if digits_match:
+            num = digits_match.group()
+            if num.startswith('5') and len(num) > 1:
+                return "S" + num[1:]
+            return "S" + num
+        return clean_val
+
+    if field_type == "subject":
+        # Recover 'AI' if OCR misread it as 'ALORS' or 'AL'
+        if "ALORS" in clean_val or clean_val == "AL":
+            return "AI"
+        return clean_val
+
+    return clean_val
+
 def extract_series_identity(document_annotation):
-    
+
     full_text = document_annotation.text
     details = {
         "name": "Unknown",
@@ -84,18 +129,21 @@ def extract_series_identity(document_annotation):
         "roll_no": "Unknown"
     }
 
+    # Patterns modified: Roll No allows letters for cleaning; Subject is more flexible
     patterns = {
-        "name": r"Name\s*[:\-]\s*([A-Za-z\s]+)",
+        "name": r"Name\s*[:\-]\s*([A-Za-z\s\.]+)",
         "class": r"Class\s*[:\-]\s*([A-Za-z0-9\s]+)",
-        "subject": r"Subject\s*[:\-]\s*([A-Za-z\s]+)",
-        "roll_no": r"Roll\s*(?:No|#)?\s*[:\-]\s*(\d+)"
+        "subject": r"Subject\s*[:\-]\s*([A-Za-z0-9\s]+)", 
+        "roll_no": r"Roll\s*(?:No|#)?\s*[:\-]\s*([A-Z0-9]+)" 
     }
 
     for key, pattern in patterns.items():
         match = re.search(pattern, full_text, re.IGNORECASE)
         if match:
-            # Clean the extracted value
-            details[key] = match.group(1).strip().split('\n')[0]
+            # Capture the first line of the match
+            raw_val = match.group(1).strip().split('\n')[0]
+            # Route through the cleaning function
+            details[key] = clean_student_data(raw_val, key)
 
     return details
 
