@@ -204,6 +204,7 @@ def clean_answer_text(text: str, q_number: int) -> str:
     
     for pattern in patterns:
         text = re.sub(pattern, '', text, count=1)
+    text = text.lstrip(' :.-_°)]}#@')
     
     return text.strip()
 

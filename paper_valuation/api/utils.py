@@ -147,7 +147,7 @@ def extract_series_identity(document_annotation):
 
     return details
 
-def evaluate_series_paper(student_id,answer_files):
+def evaluate_series_paper(student_id,answer_files,manual_roll_no):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
             student_id.save(tmp.name)
@@ -156,6 +156,8 @@ def evaluate_series_paper(student_id,answer_files):
         logging.info(f"Extracting identity from: {student_id.filename}")
         id_annotation = get_document_annotation(id_temp_path)
         student_info = extract_series_identity(id_annotation)
+        if int(manual_roll_no):
+            student_info["roll_no"]=manual_roll_no
         
         if os.path.exists(id_temp_path):
             os.remove(id_temp_path)
