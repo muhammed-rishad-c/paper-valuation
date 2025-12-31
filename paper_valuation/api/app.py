@@ -34,8 +34,11 @@ def evaluate_paper_endpoint():
 
 @app.route('/api/seriesBundleEvaluate', methods=['POST'])
 def evaluate_series_batch_handler():
-    # Use a unique identifier or roll number for contextual logging
     manual_roll_no = request.form.get('manual_roll_no', 'N/A')
+    manual_subject=request.form.get('manual_subject','N/A')
+    manual_class=request.form.get('manual_class','N/A')
+    
+    print(f"printg subject and class {manual_subject,manual_class}")
     
     logging.info(f"{'='*20} 🆕 NEW BATCH REQUEST {'='*20}")
     logging.info(f"Context: Student Roll No - {manual_roll_no}")
@@ -61,7 +64,7 @@ def evaluate_series_batch_handler():
         logging.info(f"Starting paper evaluation logic for Student: {manual_roll_no}...")
         
         # Pass the manual_roll_no to the utility for fallback logging
-        result = evaluate_series_paper(id_file, answer_files, manual_roll_no=manual_roll_no)
+        result = evaluate_series_paper(id_file, answer_files, manual_roll_no=manual_roll_no,manual_class=manual_class,manual_subject=manual_subject)
         
         logging.info(f"✅ Successfully processed evaluation for Roll No {manual_roll_no}.")
         return result

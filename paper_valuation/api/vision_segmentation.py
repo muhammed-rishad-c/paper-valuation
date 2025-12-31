@@ -33,20 +33,28 @@ def get_document_annotation(image_path: str):
     return response.full_text_annotation
 
 
+import re
+from typing import Optional
+
 def is_question_label(text: str) -> Optional[int]:
-    
     text = text.strip()
     
     patterns = [
-        r'^[Qq@]?\s*(\d+)\s*[:\.\)]\s*',  # Q1:, @1:, 1:, 1., 1)
-        r'^[Qq@](\d+)$',  # Q1, @1 (exact match)
-        r'^(\d+)$',  # Just a number at start of line (risky but sometimes needed)
+        r'^[Qq@]?\s*(\d+)\s*[:\.\)]\s*$',  # Exact match (e.g., "Q1:")
+        r'^[Qq@]?\s*(\d+)\s*[:\.\)]',       # Match at start of block
+        r'^[Qq@](\d+)$',                    # Standard "Q1" style
+        r'^(\d+)$',                         # Just a standalone number
     ]
     
     for pattern in patterns:
         match = re.match(pattern, text)
         if match:
-            return int(match.group(1))
+            try:
+                q_num = int(match.group(1))
+                if 1 <= q_num <= 50: 
+                    return q_num
+            except ValueError:
+                continue
     
     return None
 
@@ -195,20 +203,22 @@ def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional
 
 
 def clean_answer_text(text: str, q_number: int) -> str:
- 
+
     patterns = [
-        rf'^[Qq@]?\s*{q_number}\s*[:\.\)]\s*',
-        rf'^[Qq@]?\s*{q_number}\s+',
-        rf'^{q_number}\s*[:\.\)]\s*',
+        rf'^[Qq@]?\s*{q_number}\s*[:\.\)]?\s*',
+        rf'^{q_number}\s*[:\.\)]?\s*',
     ]
     
     for pattern in patterns:
-        text = re.sub(pattern, '', text, count=1)
+        
+        text = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE)
+    
+
     text = text.lstrip(' :.-_°)]}#@')
     
-    return text.strip()
+    return text.strip() 
 
-
+ 
 def segment_answers(document_annotation, debug: bool = True, config: Dict = None) -> Dict:
     
     if config is None:
