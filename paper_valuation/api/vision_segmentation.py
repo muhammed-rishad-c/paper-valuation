@@ -8,7 +8,6 @@ from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 load_dotenv()
 
-
 _SERVICE_ACCOUNT_KEY_FILE = os.environ.get("SERVICE_ACCOUNT_KEY_FILE")
 
 if not _SERVICE_ACCOUNT_KEY_FILE:
@@ -16,7 +15,7 @@ if not _SERVICE_ACCOUNT_KEY_FILE:
 
 
 def get_document_annotation(image_path: str):
-    
+    """Get document annotation from Google Vision API"""
     credentials, project_id = google.auth.load_credentials_from_file(_SERVICE_ACCOUNT_KEY_FILE)
     client = vision.ImageAnnotatorClient(credentials=credentials)
     
@@ -33,10 +32,8 @@ def get_document_annotation(image_path: str):
     return response.full_text_annotation
 
 
-import re
-from typing import Optional
-
 def is_question_label(text: str) -> Optional[int]:
+    """Check if text is a question label and return question number"""
     text = text.strip()
     
     patterns = [
@@ -60,7 +57,10 @@ def is_question_label(text: str) -> Optional[int]:
 
 
 def extract_word_level_data(document_annotation) -> List[Dict]:
-    
+    """
+    Extract word-level data with break information
+    MODIFIED: Now captures full break_type for formatted reconstruction
+    """
     word_data = []
     
     for page in document_annotation.pages:
@@ -76,26 +76,28 @@ def extract_word_level_data(document_annotation) -> List[Dict]:
                     max_y = max(v[1] for v in bbox)
                     
                     last_symbol = word.symbols[-1]
-                    has_space_after = last_symbol.property.detected_break.type_ in [
-                        vision.TextAnnotation.DetectedBreak.BreakType.SPACE,
-                        vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE,
-                        vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK
-                    ]
+                    break_type = last_symbol.property.detected_break.type_
                     
+                    # Store full break type info for formatted reconstruction
                     word_data.append({
                         'text': text,
                         'x': min_x,
                         'y': min_y,
                         'max_x': max_x,
                         'max_y': max_y,
-                        'has_space_after': has_space_after
+                        'break_type': break_type,  # Full break type (NEW)
+                        'has_space_after': break_type in [
+                            vision.TextAnnotation.DetectedBreak.BreakType.SPACE,
+                            vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE,
+                            vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK
+                        ]
                     })
     
     return word_data
 
 
 def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int = 400, max_expected_question: int = 20) -> List[Dict]:
-   
+    """Find all question labels in the document"""
     found_labels = []
     
     for i, word in enumerate(word_data):
@@ -124,7 +126,7 @@ def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int =
 
 
 def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expected_questions: List[int] = None) -> Tuple[bool, List[int], List[str], Dict]:
-    
+    """Validate that question sequence is complete and correct"""
     if not boundaries:
         return False, [], ["❌ No questions detected in the document!"], {}
     
@@ -186,7 +188,10 @@ def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expe
 
 
 def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
-   
+    """
+    Reconstruct answer text as single paragraph (for SHORT answers)
+    ORIGINAL FUNCTION - unchanged
+    """
     if end_idx is None:
         end_idx = len(words)
     
@@ -202,39 +207,84 @@ def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional
     return ''.join(answer_parts).strip()
 
 
-def clean_answer_text(text: str, q_number: int) -> str:
+def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
+    """
+    Reconstruct answer text preserving formatting (for LONG answers)
+    NEW FUNCTION - preserves line breaks and paragraph structure
+    """
+    if end_idx is None:
+        end_idx = len(words)
+    
+    answer_parts = []
+    
+    for i in range(start_idx, min(end_idx, len(words))):
+        word = words[i]
+        answer_parts.append(word['text'])
+        
+        if i < end_idx - 1:
+            break_type = word['break_type']
+            
+            # LINE_BREAK or EOL_SURE_SPACE = new line
+            if break_type in [
+                vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK,
+                vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE
+            ]:
+                answer_parts.append('\n')
+            
+            # SPACE = normal space
+            elif break_type == vision.TextAnnotation.DetectedBreak.BreakType.SPACE:
+                answer_parts.append(' ')
+    
+    # Clean up excessive newlines while preserving paragraph breaks
+    text = ''.join(answer_parts)
+    
+    # Replace 3+ newlines with double newline (paragraph break)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
 
+
+def clean_answer_text(text: str, q_number: int) -> str:
+    """Remove question label from the beginning of answer text"""
     patterns = [
         rf'^[Qq@]?\s*{q_number}\s*[:\.\)]?\s*',
         rf'^{q_number}\s*[:\.\)]?\s*',
     ]
     
     for pattern in patterns:
-        
         text = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE)
     
-
     text = text.lstrip(' :.-_°)]}#@')
     
-    return text.strip() 
+    return text.strip()
 
  
 def segment_answers(document_annotation, debug: bool = True, config: Dict = None) -> Dict:
-    
+    """
+    Segment answers from document annotation
+    MODIFIED: Now supports question_types config for short/long answer differentiation
+    """
     if config is None:
         config = {}
     
     LEFT_MARGIN_THRESHOLD = config.get('left_margin_threshold', 400)
-    MIN_VERTICAL_SPACING = config.get('min_vertical_spacing', 30)
-    STRICT_VALIDATION = config.get('strict_validation', False)  # Changed default to False for multi-page
+    STRICT_VALIDATION = config.get('strict_validation', False)
     EXPECTED_QUESTIONS = config.get('expected_questions', None)
     MAX_EXPECTED_QUESTION = config.get('max_expected_question', 20)
+    
+    # NEW: Get question types mapping from config
+    question_types = config.get('question_types', {})
     
     word_data = extract_word_level_data(document_annotation)
     
     if debug:
         print(f"\n{'='*70}")
         print(f"📄 DOCUMENT ANALYSIS - Extracted {len(word_data)} words")
+        if question_types:
+            print(f"📋 Using answer key configuration:")
+            short_count = len([t for t in question_types.values() if t == 'short'])
+            long_count = len([t for t in question_types.values() if t == 'long'])
+            print(f"   {short_count} short questions, {long_count} long questions")
         print(f"{'='*70}")
     
     boundaries = find_all_question_labels(word_data, LEFT_MARGIN_THRESHOLD, MAX_EXPECTED_QUESTION)
@@ -244,7 +294,8 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         if boundaries:
             print(f"   Found {len(boundaries)} question label(s):")
             for b in boundaries:
-                print(f"      • {b['label']} at Y={b['y_start']}, X={b['x_start']} (word #{b['word_index']})")
+                q_type = question_types.get(str(b['q_number']), 'default')
+                print(f"      • {b['label']} at Y={b['y_start']}, X={b['x_start']} [Type: {q_type}]")
         else:
             print("   ❌ No question labels detected on this page!")
     
@@ -294,7 +345,19 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         else:
             end_idx = len(word_data)
         
-        answer_text = reconstruct_answer_text(word_data, start_idx, end_idx)
+        # NEW: Choose reconstruction method based on question type
+        q_num = boundary['q_number']
+        answer_type = question_types.get(str(q_num), 'short')  # Default to short
+        
+        if debug and question_types:
+            print(f"\n   Processing {boundary['label']} as '{answer_type}' answer")
+        
+        # Use appropriate reconstruction function
+        if answer_type == 'long':
+            answer_text = reconstruct_answer_text_formatted(word_data, start_idx, end_idx)
+        else:
+            answer_text = reconstruct_answer_text(word_data, start_idx, end_idx)
+        
         answer_text = clean_answer_text(answer_text, boundary['q_number'])
         
         segmented_answers_unsorted[boundary['label']] = answer_text
@@ -346,9 +409,10 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
 
 
 def detect_and_segment_image(image_path: str, debug: bool = True, config: Dict = None) -> Dict:
-    
+    """
+    Main entry point for document segmentation
+    Performs OCR and segments answers based on question labels
+    """
     document_annotation = get_document_annotation(image_path)
     result = segment_answers(document_annotation, debug=debug, config=config)
     return result
-
-

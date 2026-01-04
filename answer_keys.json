@@ -1,0 +1,24 @@
+{
+  "AI_S8_AI_midterm_2026_D241C674": {
+    "exam_id": "AI_S8_AI_midterm_2026_D241C674",
+    "exam_name": "AI midterm 2026",
+    "class": "S8",
+    "subject": "AI",
+    "short_questions_range": "1-2",
+    "long_questions_range": "3-4",
+    "question_types": {
+      "1": "short",
+      "2": "short",
+      "3": "long",
+      "4": "long"
+    },
+    "short_answers": {
+      "Q1": "photosynthesis is the process by which o am un food, they take plants make their own in Sunlight and corbon dioxide to 1108 Create sugar and release oxygen pl for human to breathe IA toped on",
+      "Q2": "The water cycle describe how water moves around the planet it start with evaporation from sea. Then it turn into clouds and finally fall as ram",
+      "Q3": "Our earth has different types, the top part is the crust, then comes the mantle inside that is the core"
+    },
+    "long_answers": {
+      "Q4": "Artificial intelligence is about making Computers smart it allows machines to learn from data so they can Solve problem like human do every day"
+    }
+  }
+}
