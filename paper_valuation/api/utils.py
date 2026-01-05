@@ -278,9 +278,9 @@ def extract_answer_key_text_util(answer_key_image, answer_type):
             answer_key_image.save(tmp.name)
             temp_path = tmp.name
         
-        # Configure for answer key extraction
+        # ✅ FIX: Pass default_answer_type to tell system how to format ALL questions on this page
         config = {
-            'answer_type_default': answer_type,
+            'default_answer_type': answer_type,  # 'short' or 'long' from upload context
             'strict_validation': False
         }
         
@@ -289,7 +289,7 @@ def extract_answer_key_text_util(answer_key_image, answer_type):
         if os.path.exists(temp_path):
             os.remove(temp_path)
         
-        logging.info(f"✅ Successfully extracted {len(result['answers'])} answers from answer key")
+        logging.info(f"✅ Successfully extracted {len(result['answers'])} answers as '{answer_type}' type")
         
         return {
             "status": "Success",

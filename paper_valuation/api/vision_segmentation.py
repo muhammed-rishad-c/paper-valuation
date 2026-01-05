@@ -209,13 +209,17 @@ def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional
 
 def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
     """
-    Reconstruct answer text preserving formatting (for LONG answers)
-    NEW FUNCTION - preserves line breaks and paragraph structure
+    Reconstruct answer text preserving paragraph structure (for LONG answers)
+    SMART VERSION: 
+    - Empty lines (gaps) = paragraph breaks
+    - Regular line breaks = converted to spaces (continuous text)
+    - Bullet points = preserved
     """
     if end_idx is None:
         end_idx = len(words)
     
     answer_parts = []
+    consecutive_newlines = 0
     
     for i in range(start_idx, min(end_idx, len(words))):
         word = words[i]
@@ -224,25 +228,60 @@ def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx
         if i < end_idx - 1:
             break_type = word['break_type']
             
-            # LINE_BREAK or EOL_SURE_SPACE = new line
+            # LINE_BREAK or EOL_SURE_SPACE = line ending
             if break_type in [
                 vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK,
                 vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE
             ]:
-                answer_parts.append('\n')
+                consecutive_newlines += 1
+                # Don't add anything yet - we'll decide based on next word
             
             # SPACE = normal space
             elif break_type == vision.TextAnnotation.DetectedBreak.BreakType.SPACE:
                 answer_parts.append(' ')
+                consecutive_newlines = 0
+            
+            else:
+                consecutive_newlines = 0
+            
+            # Check if we should insert newline or space
+            if consecutive_newlines > 0:
+                # Check if next word starts a new bullet point or if there's a gap
+                next_word = words[i + 1] if i + 1 < end_idx else None
+                
+                if next_word:
+                    # Detect bullet point at start of next word
+                    is_bullet = next_word['text'].strip() in ['•', '●', '○', '-', '*'] or \
+                                (len(next_word['text']) >= 2 and next_word['text'][0] in ['•', '●', '○', '-', '*'])
+                    
+                    # Check Y-axis gap (empty line detection)
+                    y_gap = next_word['y'] - word['max_y']
+                    
+                    # If bullet point OR significant gap (empty line) → paragraph break
+                    # Increased threshold from 40 to 70 for better paragraph detection
+                    if is_bullet or y_gap > 70:  # 70px = roughly 1.5-2 line heights (actual gap)
+                        answer_parts.append('\n\n')  # Paragraph break
+                    else:
+                        answer_parts.append(' ')  # Regular space
+                    
+                    consecutive_newlines = 0
     
-    # Clean up excessive newlines while preserving paragraph breaks
+    # Clean up the text
     text = ''.join(answer_parts)
     
-    # Replace 3+ newlines with double newline (paragraph break)
+    # Remove excessive spaces
+    text = re.sub(r' +', ' ', text)
+    
+    # Clean up excessive newlines (3+ → 2)
     text = re.sub(r'\n{3,}', '\n\n', text)
     
+    # Remove spaces before newlines
+    text = re.sub(r' +\n', '\n', text)
+    
+    # Remove spaces after newlines
+    text = re.sub(r'\n +', '\n', text)
+    
     return text.strip()
-
 
 def clean_answer_text(text: str, q_number: int) -> str:
     """Remove question label from the beginning of answer text"""
@@ -272,8 +311,11 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     EXPECTED_QUESTIONS = config.get('expected_questions', None)
     MAX_EXPECTED_QUESTION = config.get('max_expected_question', 20)
     
-    # NEW: Get question types mapping from config
+    # Get question types mapping from config (for student papers with saved answer key)
     question_types = config.get('question_types', {})
+    
+    # ✅ NEW: Get default answer type for answer key extraction
+    default_answer_type = config.get('default_answer_type', 'short')
     
     word_data = extract_word_level_data(document_annotation)
     
@@ -285,6 +327,8 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
             short_count = len([t for t in question_types.values() if t == 'short'])
             long_count = len([t for t in question_types.values() if t == 'long'])
             print(f"   {short_count} short questions, {long_count} long questions")
+        else:
+            print(f"📋 Using default answer type: '{default_answer_type}' for all questions")
         print(f"{'='*70}")
     
     boundaries = find_all_question_labels(word_data, LEFT_MARGIN_THRESHOLD, MAX_EXPECTED_QUESTION)
@@ -294,7 +338,11 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         if boundaries:
             print(f"   Found {len(boundaries)} question label(s):")
             for b in boundaries:
-                q_type = question_types.get(str(b['q_number']), 'default')
+                # Determine question type for display
+                if question_types:
+                    q_type = question_types.get(str(b['q_number']), 'default')
+                else:
+                    q_type = default_answer_type
                 print(f"      • {b['label']} at Y={b['y_start']}, X={b['x_start']} [Type: {q_type}]")
         else:
             print("   ❌ No question labels detected on this page!")
@@ -345,14 +393,20 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         else:
             end_idx = len(word_data)
         
-        # NEW: Choose reconstruction method based on question type
+        # ✅ FIXED: Determine answer type based on available config
         q_num = boundary['q_number']
-        answer_type = question_types.get(str(q_num), 'short')  # Default to short
         
-        if debug and question_types:
+        if question_types:
+            # Using saved answer key - get specific question type
+            answer_type = question_types.get(str(q_num), 'short')
+        else:
+            # During answer key extraction - use default for ALL questions
+            answer_type = default_answer_type
+        
+        if debug:
             print(f"\n   Processing {boundary['label']} as '{answer_type}' answer")
         
-        # Use appropriate reconstruction function
+        # ✅ Use appropriate reconstruction function based on answer type
         if answer_type == 'long':
             answer_text = reconstruct_answer_text_formatted(word_data, start_idx, end_idx)
         else:
@@ -362,6 +416,7 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         
         segmented_answers_unsorted[boundary['label']] = answer_text
     
+    # Sort answers by question number
     sorted_keys = sorted(
         [k for k in segmented_answers_unsorted.keys() if k != 'UNLABELED_CONTINUATION'],
         key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0

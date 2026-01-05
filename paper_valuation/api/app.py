@@ -144,7 +144,7 @@ def evaluate_series_batch_handler():
     manual_subject = request.form.get('manual_subject', 'N/A')
     manual_class = request.form.get('manual_class', 'N/A')
     exam_id = request.form.get('exam_id', None)
-    
+     
     logging.info(f"{'='*20} 🆕 NEW BATCH REQUEST {'='*20}")
     logging.info(f"Context: Student Roll No - {manual_roll_no}")
     logging.info(f"Exam ID: {exam_id if exam_id else 'Not provided (using defaults)'}")
