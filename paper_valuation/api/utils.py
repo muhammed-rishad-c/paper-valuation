@@ -107,6 +107,13 @@ def merge_multi_page_result(all_pages_list):
 def evaluate_paper_individual(files, config=None):
     """Evaluate individual student paper (multiple pages)"""
     try:
+        # Default to handwritten if not specified
+        if config is None:
+            config = {}
+        
+        if 'is_handwritten' not in config:
+            config['is_handwritten'] = True  # ✅ Default assumption
+        
         all_page_result = []
         
         for index, file in enumerate(files):
@@ -205,7 +212,7 @@ def extract_series_identity(document_annotation):
 # ============================================
 
 def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class, manual_subject, exam_id=None):
-    """Evaluate series paper with answer key support"""
+    """Evaluate series paper with answer key support (HANDWRITTEN STUDENT PAPERS)"""
     try:
         # Extract identity
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
@@ -226,12 +233,15 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
             os.remove(id_temp_path)
         
         # Load answer key configuration if exam_id provided
-        config = None
+        config = {
+            'is_handwritten': True  # ✅ CRITICAL: Student papers are handwritten
+        }
+        
         if exam_id:
             answer_key = get_answer_key_by_id(exam_id)
             if answer_key:
                 question_types = answer_key['question_types']
-                config = {'question_types': question_types}
+                config['question_types'] = question_types
                 logging.info(f"✅ Loaded answer key: {answer_key['exam_name']}")
                 logging.info(f"   Question types: {len([q for q in question_types.values() if q == 'short'])} short, "
                            f"{len([q for q in question_types.values() if q == 'long'])} long")
@@ -245,9 +255,9 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
                 file.save(tmp.name)
                 temp_path = tmp.name
             
-            logging.info(f"Processing Answer Page {index + 1} for {student_info['name']}")
+            logging.info(f"Processing Answer Page {index + 1} for {student_info['name']} (HANDWRITTEN)")
             
-            # Pass config with question types to segmentation
+            # ✅ Pass config with is_handwritten=True to segmentation
             page_result = detect_and_segment_image(temp_path, debug=True, config=config)
             all_pages_result.append(page_result)
             
@@ -272,16 +282,17 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
 # ============================================
 
 def extract_answer_key_text_util(answer_key_image, answer_type):
-    """Extract text from answer key image"""
+    """Extract text from answer key image (PRINTED TEXT)"""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
             answer_key_image.save(tmp.name)
             temp_path = tmp.name
         
-        # ✅ FIX: Pass default_answer_type to tell system how to format ALL questions on this page
+        # ✅ CRITICAL: Mark as NOT handwritten (teacher's printed answer key)
         config = {
-            'default_answer_type': answer_type,  # 'short' or 'long' from upload context
-            'strict_validation': False
+            'default_answer_type': answer_type,
+            'strict_validation': False,
+            'is_handwritten': False  # Teacher answer keys are typically printed
         }
         
         result = detect_and_segment_image(temp_path, debug=True, config=config)
@@ -289,7 +300,7 @@ def extract_answer_key_text_util(answer_key_image, answer_type):
         if os.path.exists(temp_path):
             os.remove(temp_path)
         
-        logging.info(f"✅ Successfully extracted {len(result['answers'])} answers as '{answer_type}' type")
+        logging.info(f"✅ Successfully extracted {len(result['answers'])} answers as '{answer_type}' type (PRINTED)")
         
         return {
             "status": "Success",
@@ -304,35 +315,134 @@ def extract_answer_key_text_util(answer_key_image, answer_type):
 # ============================================
 # ANSWER KEY SAVE
 # ============================================
+def parse_marks_string(marks_str, question_count):
+    """
+    Parse marks string and return list of marks for each question
+    
+    Examples:
+        "2" with 3 questions -> [2, 2, 2]
+        "2,2,3" with 3 questions -> [2, 2, 3]
+        "7,10" with 2 questions -> [7, 10]
+    
+    Args:
+        marks_str: String containing marks (e.g., "2" or "2,2,3")
+        question_count: Number of questions expected
+    
+    Returns:
+        List of integers representing marks for each question
+    
+    Raises:
+        ValueError: If marks string is invalid or count mismatch
+    """
+    if not marks_str or not marks_str.strip():
+        raise ValueError("Marks string cannot be empty")
+    
+    marks_str = marks_str.strip()
+    
+    # Check if it's a single number (uniform marks)
+    if ',' not in marks_str:
+        try:
+            mark = int(marks_str)
+            if mark <= 0:
+                raise ValueError("Marks must be positive numbers")
+            return [mark] * question_count
+        except ValueError:
+            raise ValueError(f"Invalid marks format: '{marks_str}'. Use single number or comma-separated numbers.")
+    
+    # Parse comma-separated marks
+    marks_parts = [part.strip() for part in marks_str.split(',')]
+    
+    try:
+        marks_list = [int(mark) for mark in marks_parts]
+    except ValueError:
+        raise ValueError(f"Invalid marks format: '{marks_str}'. All values must be numbers.")
+    
+    # Validate all marks are positive
+    if any(mark <= 0 for mark in marks_list):
+        raise ValueError("All marks must be positive numbers")
+    
+    # Validate count matches
+    if len(marks_list) != question_count:
+        raise ValueError(
+            f"Marks count mismatch: provided {len(marks_list)} marks but have {question_count} questions. "
+            f"Use single number for uniform marks or provide exact count."
+        )
+    
+    return marks_list
+
+
 def save_answer_key_util(data):
-    """Save complete answer key with metadata"""
+    """Save complete answer key with metadata and marks"""
     try:
         exam_name = data.get('exam_name')
         class_name = data.get('class_name')
         subject = data.get('subject')
         short_questions_str = data.get('short_questions')
         long_questions_str = data.get('long_questions')
+        short_marks_str = data.get('short_marks', '')
+        long_marks_str = data.get('long_marks', '')
         
-        # ✅ FIX: No json.loads() needed - data is already parsed by Flask
+        # Get answers (already parsed as dicts)
         short_answers = data.get('short_answers', {})
         long_answers = data.get('long_answers', {})
         
         if not all([exam_name, class_name, subject]):
-            return {"status": "Failed", "error": "Missing required fields"}
+            return {"status": "Failed", "error": "Missing required fields: exam_name, class_name, or subject"}
         
         logging.info(f"💾 Saving answer key for: {exam_name} ({class_name} - {subject})")
         
         exam_id = generate_exam_id(exam_name, class_name, subject)
         
+        # Parse question ranges
         short_questions = parse_question_range(short_questions_str) if short_questions_str else []
         long_questions = parse_question_range(long_questions_str) if long_questions_str else []
         
+        # Validate at least one question type exists
+        if not short_questions and not long_questions:
+            return {"status": "Failed", "error": "Please specify at least one question range (short or long)"}
+        
+        # Create question_types mapping
         question_types = {}
         for q in short_questions:
             question_types[str(q)] = 'short'
         for q in long_questions:
             question_types[str(q)] = 'long'
         
+        # ✅ NEW: Parse and create question_marks mapping
+        question_marks = {}
+        total_marks = 0
+        
+        # Process short question marks
+        if short_questions and short_marks_str:
+            try:
+                short_marks_list = parse_marks_string(short_marks_str, len(short_questions))
+                for q_num, mark in zip(short_questions, short_marks_list):
+                    question_marks[str(q_num)] = mark
+                    total_marks += mark
+                logging.info(f"   ✅ Short questions: {len(short_questions)} questions, marks: {short_marks_list}")
+            except ValueError as e:
+                return {"status": "Failed", "error": f"Short question marks error: {str(e)}"}
+        elif short_questions and not short_marks_str:
+            return {"status": "Failed", "error": "Short questions specified but no marks provided"}
+        
+        # Process long question marks
+        if long_questions and long_marks_str:
+            try:
+                long_marks_list = parse_marks_string(long_marks_str, len(long_questions))
+                for q_num, mark in zip(long_questions, long_marks_list):
+                    question_marks[str(q_num)] = mark
+                    total_marks += mark
+                logging.info(f"   ✅ Long questions: {len(long_questions)} questions, marks: {long_marks_list}")
+            except ValueError as e:
+                return {"status": "Failed", "error": f"Long question marks error: {str(e)}"}
+        elif long_questions and not long_marks_str:
+            return {"status": "Failed", "error": "Long questions specified but no marks provided"}
+        
+        # Validate total marks is positive
+        if total_marks <= 0:
+            return {"status": "Failed", "error": "Total marks must be greater than 0"}
+        
+        # Create complete answer key structure
         answer_key = {
             'exam_id': exam_id,
             'exam_name': exam_name,
@@ -341,24 +451,31 @@ def save_answer_key_util(data):
             'short_questions_range': short_questions_str,
             'long_questions_range': long_questions_str,
             'question_types': question_types,
+            'question_marks': question_marks,      # ✅ NEW
+            'total_marks': total_marks,            # ✅ NEW
             'short_answers': short_answers,
             'long_answers': long_answers
         }
         
+        # Save to storage
         all_answer_keys = load_answer_keys()
         all_answer_keys[exam_id] = answer_key
         save_answer_keys(all_answer_keys)
         
         logging.info(f"✅ Answer key saved: {exam_id}")
-        logging.info(f"   {len(short_questions)} short, {len(long_questions)} long questions")
+        logging.info(f"   📊 {len(short_questions)} short + {len(long_questions)} long = {len(question_types)} total questions")
+        logging.info(f"   💯 Total marks: {total_marks}")
         
         return {
             "status": "Success",
             "exam_id": exam_id,
             "message": "Answer key saved successfully",
-            "question_count": len(question_types)
+            "question_count": len(question_types),
+            "total_marks": total_marks        # ✅ NEW - return to frontend
         }
         
     except Exception as e:
         logging.error(f"Error in save_answer_key_util: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
         raise

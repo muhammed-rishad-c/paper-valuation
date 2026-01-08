@@ -207,19 +207,24 @@ def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional
     return ''.join(answer_parts).strip()
 
 
-def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
+
+def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx: Optional[int] = None, 
+                                      is_handwritten: bool = True) -> str:
     """
     Reconstruct answer text preserving paragraph structure (for LONG answers)
-    SMART VERSION: 
-    - Empty lines (gaps) = paragraph breaks
-    - Regular line breaks = converted to spaces (continuous text)
-    - Bullet points = preserved
+    ENHANCED VERSION with better handwriting support:
+    - Adaptive thresholds for handwritten vs printed text
+    - Multiple paragraph detection strategies
+    - Better handling of student writing patterns
     """
     if end_idx is None:
         end_idx = len(words)
     
     answer_parts = []
     consecutive_newlines = 0
+    
+    # ✅ ADAPTIVE THRESHOLD: Lower for handwriting, higher for printed
+    PARAGRAPH_GAP_THRESHOLD = 45 if is_handwritten else 70  # Reduced from 70 to 45 for handwriting
     
     for i in range(start_idx, min(end_idx, len(words))):
         word = words[i]
@@ -234,7 +239,6 @@ def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx
                 vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE
             ]:
                 consecutive_newlines += 1
-                # Don't add anything yet - we'll decide based on next word
             
             # SPACE = normal space
             elif break_type == vision.TextAnnotation.DetectedBreak.BreakType.SPACE:
@@ -246,20 +250,45 @@ def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx
             
             # Check if we should insert newline or space
             if consecutive_newlines > 0:
-                # Check if next word starts a new bullet point or if there's a gap
                 next_word = words[i + 1] if i + 1 < end_idx else None
                 
                 if next_word:
                     # Detect bullet point at start of next word
-                    is_bullet = next_word['text'].strip() in ['•', '●', '○', '-', '*'] or \
+                    is_bullet = next_word['text'].strip() in ['•', '●', '○', '-', '*', '→', '▸'] or \
                                 (len(next_word['text']) >= 2 and next_word['text'][0] in ['•', '●', '○', '-', '*'])
                     
                     # Check Y-axis gap (empty line detection)
                     y_gap = next_word['y'] - word['max_y']
                     
-                    # If bullet point OR significant gap (empty line) → paragraph break
-                    # Increased threshold from 40 to 70 for better paragraph detection
-                    if is_bullet or y_gap > 70:  # 70px = roughly 1.5-2 line heights (actual gap)
+                    # ✅ NEW: Calculate average line height for context
+                    current_line_height = word['max_y'] - word['y']
+                    
+                    # ✅ ENHANCED DETECTION: Multiple strategies
+                    should_break = False
+                    
+                    # Strategy 1: Explicit bullet points (highest confidence)
+                    if is_bullet:
+                        should_break = True
+                    
+                    # Strategy 2: Significant gap (using adaptive threshold)
+                    elif y_gap > PARAGRAPH_GAP_THRESHOLD:
+                        should_break = True
+                    
+                    # Strategy 3: Gap larger than 1.5x the current line height (NEW)
+                    elif current_line_height > 0 and y_gap > (current_line_height * 1.3):
+                        should_break = True
+                    
+                    # Strategy 4: Detect indentation change (NEW for handwriting)
+                    elif is_handwritten and abs(next_word['x'] - word['x']) > 50:
+                        # Significant horizontal shift might indicate new paragraph
+                        should_break = True
+                    
+                    # Strategy 5: Sentence ending + gap (NEW)
+                    elif word['text'].rstrip().endswith(('.', '!', '?')) and y_gap > 25:
+                        # If previous word ends sentence and there's any gap
+                        should_break = True
+                    
+                    if should_break:
                         answer_parts.append('\n\n')  # Paragraph break
                     else:
                         answer_parts.append(' ')  # Regular space
@@ -301,7 +330,7 @@ def clean_answer_text(text: str, q_number: int) -> str:
 def segment_answers(document_annotation, debug: bool = True, config: Dict = None) -> Dict:
     """
     Segment answers from document annotation
-    MODIFIED: Now supports question_types config for short/long answer differentiation
+    MODIFIED: Now detects handwritten vs printed text and adjusts paragraph detection
     """
     if config is None:
         config = {}
@@ -311,17 +340,19 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     EXPECTED_QUESTIONS = config.get('expected_questions', None)
     MAX_EXPECTED_QUESTION = config.get('max_expected_question', 20)
     
-    # Get question types mapping from config (for student papers with saved answer key)
+    # Get question types mapping from config
     question_types = config.get('question_types', {})
-    
-    # ✅ NEW: Get default answer type for answer key extraction
     default_answer_type = config.get('default_answer_type', 'short')
+    
+    # ✅ NEW: Detect if this is handwritten (student) or printed (teacher)
+    is_handwritten = config.get('is_handwritten', True)  # Default to handwritten
     
     word_data = extract_word_level_data(document_annotation)
     
     if debug:
         print(f"\n{'='*70}")
         print(f"📄 DOCUMENT ANALYSIS - Extracted {len(word_data)} words")
+        print(f"📝 Document type: {'HANDWRITTEN (Student)' if is_handwritten else 'PRINTED (Teacher)'}")
         if question_types:
             print(f"📋 Using answer key configuration:")
             short_count = len([t for t in question_types.values() if t == 'short'])
@@ -338,7 +369,6 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         if boundaries:
             print(f"   Found {len(boundaries)} question label(s):")
             for b in boundaries:
-                # Determine question type for display
                 if question_types:
                     q_type = question_types.get(str(b['q_number']), 'default')
                 else:
@@ -393,22 +423,22 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         else:
             end_idx = len(word_data)
         
-        # ✅ FIXED: Determine answer type based on available config
+        # Determine answer type
         q_num = boundary['q_number']
         
         if question_types:
-            # Using saved answer key - get specific question type
             answer_type = question_types.get(str(q_num), 'short')
         else:
-            # During answer key extraction - use default for ALL questions
             answer_type = default_answer_type
         
         if debug:
             print(f"\n   Processing {boundary['label']} as '{answer_type}' answer")
         
-        # ✅ Use appropriate reconstruction function based on answer type
+        # ✅ FIXED: Pass is_handwritten parameter to reconstruction function
         if answer_type == 'long':
-            answer_text = reconstruct_answer_text_formatted(word_data, start_idx, end_idx)
+            answer_text = reconstruct_answer_text_formatted(
+                word_data, start_idx, end_idx, is_handwritten=is_handwritten
+            )
         else:
             answer_text = reconstruct_answer_text(word_data, start_idx, end_idx)
         
@@ -446,7 +476,8 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
             'is_complete': is_valid,
             'missing_questions': missing,
             'has_duplicates': validation_info.get('has_duplicates', False),
-            'expected_questions': EXPECTED_QUESTIONS
+            'expected_questions': EXPECTED_QUESTIONS,
+            'is_handwritten': is_handwritten  # Include in metadata
         },
         'validation': {
             'is_valid': is_valid,
@@ -461,6 +492,7 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         print(f"{'='*70}\n")
     
     return result
+
 
 
 def detect_and_segment_image(image_path: str, debug: bool = True, config: Dict = None) -> Dict:

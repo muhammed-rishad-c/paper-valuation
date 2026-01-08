@@ -166,6 +166,7 @@ def evaluate_series_batch_handler():
 
         logging.info(f"Starting paper evaluation logic for Student: {manual_roll_no}...")
         
+        
         result = evaluate_series_paper(
             id_file, 
             answer_files, 
@@ -174,6 +175,7 @@ def evaluate_series_batch_handler():
             manual_subject=manual_subject,
             exam_id=exam_id
         )
+        
         
         logging.info(f"✅ Successfully processed evaluation for Roll No {manual_roll_no}.")
         return result
