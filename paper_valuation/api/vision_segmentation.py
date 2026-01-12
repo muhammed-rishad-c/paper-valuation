@@ -14,8 +14,8 @@ if not _SERVICE_ACCOUNT_KEY_FILE:
     raise ValueError("SERVICE_ACCOUNT_KEY_FILE not found. Check if .env is loaded correctly.")
 
 
+
 def get_document_annotation(image_path: str):
-    """Get document annotation from Google Vision API"""
     credentials, project_id = google.auth.load_credentials_from_file(_SERVICE_ACCOUNT_KEY_FILE)
     client = vision.ImageAnnotatorClient(credentials=credentials)
     
@@ -32,15 +32,15 @@ def get_document_annotation(image_path: str):
     return response.full_text_annotation
 
 
+
 def is_question_label(text: str) -> Optional[int]:
-    """Check if text is a question label and return question number"""
     text = text.strip()
     
     patterns = [
-        r'^[Qq@]?\s*(\d+)\s*[:\.\)]\s*$',  # Exact match (e.g., "Q1:")
-        r'^[Qq@]?\s*(\d+)\s*[:\.\)]',       # Match at start of block
-        r'^[Qq@](\d+)$',                    # Standard "Q1" style
-        r'^(\d+)$',                         # Just a standalone number
+        r'^[Qq@]?\s*(\d+)\s*[:\.\)]\s*$',  
+        r'^[Qq@]?\s*(\d+)\s*[:\.\)]',       
+        r'^[Qq@](\d+)$',                    
+        r'^(\d+)$',
     ]
     
     for pattern in patterns:
@@ -56,11 +56,9 @@ def is_question_label(text: str) -> Optional[int]:
     return None
 
 
+
 def extract_word_level_data(document_annotation) -> List[Dict]:
-    """
-    Extract word-level data with break information
-    MODIFIED: Now captures full break_type for formatted reconstruction
-    """
+    
     word_data = []
     
     for page in document_annotation.pages:
@@ -92,12 +90,12 @@ def extract_word_level_data(document_annotation) -> List[Dict]:
                             vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK
                         ]
                     })
-    
     return word_data
 
 
+
 def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int = 400, max_expected_question: int = 20) -> List[Dict]:
-    """Find all question labels in the document"""
+
     found_labels = []
     
     for i, word in enumerate(word_data):
@@ -125,12 +123,12 @@ def find_all_question_labels(word_data: List[Dict], left_margin_threshold: int =
     return found_labels
 
 
+
 def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expected_questions: List[int] = None) -> Tuple[bool, List[int], List[str], Dict]:
-    """Validate that question sequence is complete and correct"""
+    
     if not boundaries:
         return False, [], ["❌ No questions detected in the document!"], {}
     
-    # Get all detected question numbers
     q_numbers = [b['q_number'] for b in boundaries]
     found_set = set(q_numbers)
     q_numbers_sorted = sorted(q_numbers)
@@ -155,7 +153,6 @@ def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expe
         'min_question': min_q,
         'max_question': max_q
     }
-    
     if 1 not in found_set:
         if strict:
             warnings.append(f"⚠️  Q1 not found. Document starts from Q{min_q}.")
@@ -187,11 +184,9 @@ def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expe
     return is_valid, missing, warnings, info
 
 
+
 def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
-    """
-    Reconstruct answer text as single paragraph (for SHORT answers)
-    ORIGINAL FUNCTION - unchanged
-    """
+   
     if end_idx is None:
         end_idx = len(words)
     
@@ -210,21 +205,13 @@ def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional
 
 def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx: Optional[int] = None, 
                                       is_handwritten: bool = True) -> str:
-    """
-    Reconstruct answer text preserving paragraph structure (for LONG answers)
-    ENHANCED VERSION with better handwriting support:
-    - Adaptive thresholds for handwritten vs printed text
-    - Multiple paragraph detection strategies
-    - Better handling of student writing patterns
-    """
     if end_idx is None:
         end_idx = len(words)
     
     answer_parts = []
     consecutive_newlines = 0
     
-    # ✅ ADAPTIVE THRESHOLD: Lower for handwriting, higher for printed
-    PARAGRAPH_GAP_THRESHOLD = 45 if is_handwritten else 70  # Reduced from 70 to 45 for handwriting
+    PARAGRAPH_GAP_THRESHOLD = 45 if is_handwritten else 70  
     
     for i in range(start_idx, min(end_idx, len(words))):
         word = words[i]
@@ -233,87 +220,62 @@ def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx
         if i < end_idx - 1:
             break_type = word['break_type']
             
-            # LINE_BREAK or EOL_SURE_SPACE = line ending
             if break_type in [
                 vision.TextAnnotation.DetectedBreak.BreakType.LINE_BREAK,
                 vision.TextAnnotation.DetectedBreak.BreakType.EOL_SURE_SPACE
             ]:
                 consecutive_newlines += 1
             
-            # SPACE = normal space
             elif break_type == vision.TextAnnotation.DetectedBreak.BreakType.SPACE:
                 answer_parts.append(' ')
                 consecutive_newlines = 0
             
             else:
                 consecutive_newlines = 0
-            
-            # Check if we should insert newline or space
+
             if consecutive_newlines > 0:
                 next_word = words[i + 1] if i + 1 < end_idx else None
                 
                 if next_word:
-                    # Detect bullet point at start of next word
                     is_bullet = next_word['text'].strip() in ['•', '●', '○', '-', '*', '→', '▸'] or \
                                 (len(next_word['text']) >= 2 and next_word['text'][0] in ['•', '●', '○', '-', '*'])
-                    
-                    # Check Y-axis gap (empty line detection)
                     y_gap = next_word['y'] - word['max_y']
                     
-                    # ✅ NEW: Calculate average line height for context
                     current_line_height = word['max_y'] - word['y']
-                    
-                    # ✅ ENHANCED DETECTION: Multiple strategies
                     should_break = False
-                    
-                    # Strategy 1: Explicit bullet points (highest confidence)
                     if is_bullet:
                         should_break = True
                     
-                    # Strategy 2: Significant gap (using adaptive threshold)
                     elif y_gap > PARAGRAPH_GAP_THRESHOLD:
                         should_break = True
                     
-                    # Strategy 3: Gap larger than 1.5x the current line height (NEW)
                     elif current_line_height > 0 and y_gap > (current_line_height * 1.3):
                         should_break = True
                     
-                    # Strategy 4: Detect indentation change (NEW for handwriting)
                     elif is_handwritten and abs(next_word['x'] - word['x']) > 50:
-                        # Significant horizontal shift might indicate new paragraph
                         should_break = True
-                    
-                    # Strategy 5: Sentence ending + gap (NEW)
+
                     elif word['text'].rstrip().endswith(('.', '!', '?')) and y_gap > 25:
-                        # If previous word ends sentence and there's any gap
                         should_break = True
                     
                     if should_break:
-                        answer_parts.append('\n\n')  # Paragraph break
+                        answer_parts.append('\n\n')  
                     else:
-                        answer_parts.append(' ')  # Regular space
+                        answer_parts.append(' ')  
                     
                     consecutive_newlines = 0
     
-    # Clean up the text
     text = ''.join(answer_parts)
-    
-    # Remove excessive spaces
     text = re.sub(r' +', ' ', text)
-    
-    # Clean up excessive newlines (3+ → 2)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    # Remove spaces before newlines
     text = re.sub(r' +\n', '\n', text)
-    
-    # Remove spaces after newlines
     text = re.sub(r'\n +', '\n', text)
     
     return text.strip()
 
+
+
 def clean_answer_text(text: str, q_number: int) -> str:
-    """Remove question label from the beginning of answer text"""
     patterns = [
         rf'^[Qq@]?\s*{q_number}\s*[:\.\)]?\s*',
         rf'^{q_number}\s*[:\.\)]?\s*',
@@ -323,15 +285,11 @@ def clean_answer_text(text: str, q_number: int) -> str:
         text = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE)
     
     text = text.lstrip(' :.-_°)]}#@')
-    
     return text.strip()
+
 
  
 def segment_answers(document_annotation, debug: bool = True, config: Dict = None) -> Dict:
-    """
-    Segment answers from document annotation
-    MODIFIED: Now detects handwritten vs printed text and adjusts paragraph detection
-    """
     if config is None:
         config = {}
     
@@ -340,12 +298,10 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     EXPECTED_QUESTIONS = config.get('expected_questions', None)
     MAX_EXPECTED_QUESTION = config.get('max_expected_question', 20)
     
-    # Get question types mapping from config
     question_types = config.get('question_types', {})
     default_answer_type = config.get('default_answer_type', 'short')
     
-    # ✅ NEW: Detect if this is handwritten (student) or printed (teacher)
-    is_handwritten = config.get('is_handwritten', True)  # Default to handwritten
+    is_handwritten = config.get('is_handwritten', True)  
     
     word_data = extract_word_level_data(document_annotation)
     
@@ -423,7 +379,6 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         else:
             end_idx = len(word_data)
         
-        # Determine answer type
         q_num = boundary['q_number']
         
         if question_types:
@@ -434,7 +389,6 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         if debug:
             print(f"\n   Processing {boundary['label']} as '{answer_type}' answer")
         
-        # ✅ FIXED: Pass is_handwritten parameter to reconstruction function
         if answer_type == 'long':
             answer_text = reconstruct_answer_text_formatted(
                 word_data, start_idx, end_idx, is_handwritten=is_handwritten
@@ -446,7 +400,6 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         
         segmented_answers_unsorted[boundary['label']] = answer_text
     
-    # Sort answers by question number
     sorted_keys = sorted(
         [k for k in segmented_answers_unsorted.keys() if k != 'UNLABELED_CONTINUATION'],
         key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0
@@ -485,7 +438,6 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
             'info': validation_info
         }
     }
-    
     if debug:
         print(f"\n{'='*70}")
         print(f"📊 SUMMARY: Found {len(segmented_answers)} answer parts")
@@ -496,10 +448,7 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
 
 
 def detect_and_segment_image(image_path: str, debug: bool = True, config: Dict = None) -> Dict:
-    """
-    Main entry point for document segmentation
-    Performs OCR and segments answers based on question labels
-    """
+
     document_annotation = get_document_annotation(image_path)
     result = segment_answers(document_annotation, debug=debug, config=config)
     return result

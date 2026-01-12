@@ -5,7 +5,6 @@ import json
 import uuid
 from flask import Flask, request, jsonify
 
-# --- Custom Imports ---
 from paper_valuation.logging.logger import logging
 from paper_valuation.api.utils import (
     evaluate_paper_individual, 
@@ -19,13 +18,10 @@ from paper_valuation.api.utils import (
 
 app = Flask(__name__)
 
-# ============================================
-# INDIVIDUAL VALUATION ROUTE
-# ============================================
+
 
 @app.route('/api/evaluate', methods=['POST'])
 def evaluate_paper_endpoint():
-    """Individual paper evaluation endpoint"""
     try:
         files = request.files.getlist('paper_images') 
         
@@ -45,13 +41,10 @@ def evaluate_paper_endpoint():
         logging.error(error_message)
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
-# ============================================
-# ANSWER KEY MANAGEMENT ENDPOINTS
-# ============================================
+
 
 @app.route('/api/extract_answer_key_text', methods=['POST'])
 def extract_answer_key_text():
-    """Extract text from answer key image for teacher verification"""
     try:
         if 'answer_key_image' not in request.files:
             return jsonify({"status": "Failed", "error": "No image file provided."}), 400
@@ -72,9 +65,7 @@ def extract_answer_key_text():
 
 @app.route('/api/save_answer_key', methods=['POST'])
 def save_answer_key():
-    """Save complete answer key with metadata"""
     try:
-        # Get JSON data
         data = request.get_json()
         
         if not data:
@@ -97,7 +88,6 @@ def save_answer_key():
 
 @app.route('/api/get_answer_key/<exam_id>', methods=['GET'])
 def get_answer_key(exam_id):
-    """Retrieve a specific answer key by exam_id"""
     try:
         result = get_answer_key_by_id(exam_id)
         if result:
@@ -108,18 +98,16 @@ def get_answer_key(exam_id):
     except Exception as e:
         logging.error(f"Error retrieving answer key: {str(e)}")
         return jsonify({"status": "Failed", "error": str(e)}), 500
+    
+    
 
 @app.route('/api/list_answer_keys', methods=['GET'])
 def list_answer_keys():
-    """List all available answer keys"""
     try:
         all_answer_keys = load_answer_keys()
-        
         answer_key_list = []
         for key, value in all_answer_keys.items():
-            # Handle both old and new structure
             if 'exam_metadata' in value:
-                # New structure
                 answer_key_list.append({
                     'exam_id': key,
                     'exam_name': value['exam_metadata'].get('exam_name', 'Unknown'),
@@ -127,7 +115,6 @@ def list_answer_keys():
                     'subject': value['exam_metadata'].get('subject', 'Unknown')
                 })
             else:
-                # Old structure (backward compatibility)
                 answer_key_list.append({
                     'exam_id': key,
                     'exam_name': value.get('exam_name', 'Unknown'),
@@ -148,13 +135,11 @@ def list_answer_keys():
         logging.error(traceback.format_exc())
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
-# ============================================
-# SERIES BATCH EVALUATION ROUTE
-# ============================================
+
+
 
 @app.route('/api/seriesBundleEvaluate', methods=['POST'])
 def evaluate_series_batch_handler():
-    """Series batch evaluation endpoint with answer key support"""
     manual_roll_no = request.form.get('manual_roll_no', 'N/A')
     manual_subject = request.form.get('manual_subject', 'N/A')
     manual_class = request.form.get('manual_class', 'N/A')
@@ -181,7 +166,6 @@ def evaluate_series_batch_handler():
 
         logging.info(f"Starting paper evaluation logic for Student: {manual_roll_no}...")
         
-        
         result = evaluate_series_paper(
             id_file, 
             answer_files, 
@@ -190,8 +174,6 @@ def evaluate_series_batch_handler():
             manual_subject=manual_subject,
             exam_id=exam_id
         )
-        
-        
         logging.info(f"✅ Successfully processed evaluation for Roll No {manual_roll_no}.")
         return result
         
@@ -213,13 +195,10 @@ def evaluate_series_batch_handler():
         }), 500
 
 
-# ============================================
-# EXAM DATA WITH SUBMISSIONS ENDPOINT
-# ============================================
+
 
 @app.route('/api/get_exam_data/<exam_id>', methods=['GET'])
 def get_complete_exam_data(exam_id):
-    """Get complete exam data: teacher answers + all student submissions"""
     try:
         exam_data = get_exam_with_submissions(exam_id)
         
@@ -237,9 +216,8 @@ def get_complete_exam_data(exam_id):
     except Exception as e:
         logging.error(f"Error retrieving complete exam data: {str(e)}")
         return jsonify({"status": "Failed", "error": str(e)}), 500
-# ============================================
-# SERVER STARTUP
-# ============================================
+
+
 
 if __name__ == '__main__':
     key_file = os.environ.get('SERVICE_ACCOUNT_KEY_FILE')
