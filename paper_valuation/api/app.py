@@ -13,7 +13,8 @@ from paper_valuation.api.utils import (
     extract_answer_key_text_util,
     save_answer_key_util,
     load_answer_keys,
-    get_answer_key_by_id
+    get_answer_key_by_id,
+    get_exam_with_submissions
 )
 
 app = Flask(__name__)
@@ -114,15 +115,27 @@ def list_answer_keys():
     try:
         all_answer_keys = load_answer_keys()
         
-        answer_key_list = [
-            {
-                'exam_id': key,
-                'exam_name': value['exam_name'],
-                'class': value['class'],
-                'subject': value['subject']
-            }
-            for key, value in all_answer_keys.items()
-        ]
+        answer_key_list = []
+        for key, value in all_answer_keys.items():
+            # Handle both old and new structure
+            if 'exam_metadata' in value:
+                # New structure
+                answer_key_list.append({
+                    'exam_id': key,
+                    'exam_name': value['exam_metadata'].get('exam_name', 'Unknown'),
+                    'class': value['exam_metadata'].get('class', 'Unknown'),
+                    'subject': value['exam_metadata'].get('subject', 'Unknown')
+                })
+            else:
+                # Old structure (backward compatibility)
+                answer_key_list.append({
+                    'exam_id': key,
+                    'exam_name': value.get('exam_name', 'Unknown'),
+                    'class': value.get('class', 'Unknown'),
+                    'subject': value.get('subject', 'Unknown')
+                })
+        
+        logging.info(f"📋 Returning {len(answer_key_list)} answer keys")
         
         return jsonify({
             "status": "Success",
@@ -131,6 +144,8 @@ def list_answer_keys():
         
     except Exception as e:
         logging.error(f"Error listing answer keys: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
 # ============================================
@@ -197,6 +212,31 @@ def evaluate_series_batch_handler():
             "details": str(e) if app.debug else "Contact Administrator" 
         }), 500
 
+
+# ============================================
+# EXAM DATA WITH SUBMISSIONS ENDPOINT
+# ============================================
+
+@app.route('/api/get_exam_data/<exam_id>', methods=['GET'])
+def get_complete_exam_data(exam_id):
+    """Get complete exam data: teacher answers + all student submissions"""
+    try:
+        exam_data = get_exam_with_submissions(exam_id)
+        
+        if not exam_data:
+            return jsonify({
+                "status": "Failed", 
+                "error": f"Exam {exam_id} not found"
+            }), 404
+        
+        return jsonify({
+            "status": "Success",
+            "exam_data": exam_data
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Error retrieving complete exam data: {str(e)}")
+        return jsonify({"status": "Failed", "error": str(e)}), 500
 # ============================================
 # SERVER STARTUP
 # ============================================

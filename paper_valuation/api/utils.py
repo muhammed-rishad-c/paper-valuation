@@ -212,7 +212,7 @@ def extract_series_identity(document_annotation):
 # ============================================
 
 def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class, manual_subject, exam_id=None):
-    """Evaluate series paper with answer key support (HANDWRITTEN STUDENT PAPERS)"""
+    """Evaluate series paper with answer key support and save to exam storage"""
     try:
         # Extract identity
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
@@ -234,15 +234,18 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
         
         # Load answer key configuration if exam_id provided
         config = {
-            'is_handwritten': True  # ✅ CRITICAL: Student papers are handwritten
+            'is_handwritten': True  # Student papers are handwritten
         }
         
         if exam_id:
             answer_key = get_answer_key_by_id(exam_id)
             if answer_key:
-                question_types = answer_key['question_types']
+                # Handle both old and new structure
+                question_types = answer_key.get('question_types', {})
                 config['question_types'] = question_types
-                logging.info(f"✅ Loaded answer key: {answer_key['exam_name']}")
+                
+                exam_name = answer_key.get('exam_metadata', {}).get('exam_name', answer_key.get('exam_name', 'Unknown'))
+                logging.info(f"✅ Loaded answer key: {exam_name}")
                 logging.info(f"   Question types: {len([q for q in question_types.values() if q == 'short'])} short, "
                            f"{len([q for q in question_types.values() if q == 'long'])} long")
             else:
@@ -257,7 +260,6 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
             
             logging.info(f"Processing Answer Page {index + 1} for {student_info['name']} (HANDWRITTEN)")
             
-            # ✅ Pass config with is_handwritten=True to segmentation
             page_result = detect_and_segment_image(temp_path, debug=True, config=config)
             all_pages_result.append(page_result)
             
@@ -266,11 +268,31 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
 
         # Merge all answers
         final_valuation = merge_multi_page_result(all_pages_result)
+        
+        # 🆕 NEW: Save student submission to exam storage
+        if exam_id and student_info['roll_no'] != 'Unknown':
+            try:
+                save_result = save_student_submission(
+                    exam_id=exam_id,
+                    roll_no=student_info['roll_no'],
+                    student_info=student_info,
+                    answers=final_valuation['answers']
+                )
+                logging.info(f"✅ Saved student {student_info['roll_no']} to exam {exam_id}")
+            except Exception as save_error:
+                logging.error(f"⚠️ Failed to save student submission: {str(save_error)}")
+                # Don't fail the whole request if save fails
+        else:
+            if not exam_id:
+                logging.warning("⚠️ No exam_id provided - student submission not saved to storage")
+            if student_info['roll_no'] == 'Unknown':
+                logging.warning("⚠️ Roll number is Unknown - student submission not saved to storage")
             
         return jsonify({
             "status": "Success",
             "student_info": student_info,
-            "recognition_result": final_valuation
+            "recognition_result": final_valuation,
+            "saved_to_exam": exam_id if exam_id else None  # 🆕 NEW
         }), 200
         
     except Exception as e:
@@ -372,7 +394,7 @@ def parse_marks_string(marks_str, question_count):
 
 
 def save_answer_key_util(data):
-    """Save complete answer key with metadata and marks"""
+    """Save complete answer key with metadata and marks - creates structure for student submissions"""
     try:
         exam_name = data.get('exam_name')
         class_name = data.get('class_name')
@@ -408,7 +430,7 @@ def save_answer_key_util(data):
         for q in long_questions:
             question_types[str(q)] = 'long'
         
-        # ✅ NEW: Parse and create question_marks mapping
+        # Parse and create question_marks mapping
         question_marks = {}
         total_marks = 0
         
@@ -442,40 +464,105 @@ def save_answer_key_util(data):
         if total_marks <= 0:
             return {"status": "Failed", "error": "Total marks must be greater than 0"}
         
-        # Create complete answer key structure
-        answer_key = {
-            'exam_id': exam_id,
-            'exam_name': exam_name,
-            'class': class_name,
-            'subject': subject,
-            'short_questions_range': short_questions_str,
-            'long_questions_range': long_questions_str,
+        # 🆕 NEW STRUCTURE: Complete exam data with student submissions section
+        exam_data = {
+            'exam_metadata': {
+                'exam_id': exam_id,
+                'exam_name': exam_name,
+                'class': class_name,
+                'subject': subject,
+                'total_marks': total_marks,
+                'created_at': str(uuid.uuid4())  # Placeholder for timestamp
+            },
             'question_types': question_types,
-            'question_marks': question_marks,      # ✅ NEW
-            'total_marks': total_marks,            # ✅ NEW
-            'short_answers': short_answers,
-            'long_answers': long_answers
+            'question_marks': question_marks,
+            'teacher_answers': {**short_answers, **long_answers},  # Merge both answer sets
+            'student_submissions': {}  # 🆕 NEW: Empty dict ready for student data
         }
         
         # Save to storage
-        all_answer_keys = load_answer_keys()
-        all_answer_keys[exam_id] = answer_key
-        save_answer_keys(all_answer_keys)
+        all_exam_data = load_answer_keys()  # Still using same file for now
+        all_exam_data[exam_id] = exam_data
+        save_answer_keys(all_exam_data)
         
         logging.info(f"✅ Answer key saved: {exam_id}")
         logging.info(f"   📊 {len(short_questions)} short + {len(long_questions)} long = {len(question_types)} total questions")
         logging.info(f"   💯 Total marks: {total_marks}")
+        logging.info(f"   👥 Student submissions structure created (empty)")
         
         return {
             "status": "Success",
             "exam_id": exam_id,
             "message": "Answer key saved successfully",
             "question_count": len(question_types),
-            "total_marks": total_marks        # ✅ NEW - return to frontend
+            "total_marks": total_marks
         }
         
     except Exception as e:
         logging.error(f"Error in save_answer_key_util: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
+        raise
+    
+    
+def save_student_submission(exam_id, roll_no, student_info, answers):
+    """Save student submission to exam's student_submissions"""
+    try:
+        all_exam_data = load_answer_keys()
+        
+        if exam_id not in all_exam_data:
+            logging.error(f"❌ Exam ID {exam_id} not found in storage")
+            return {"status": "Failed", "error": f"Exam {exam_id} does not exist"}
+        
+        exam_data = all_exam_data[exam_id]
+        
+        # Create student submission entry
+        import datetime
+        submission = {
+            'student_info': student_info,
+            'answers': answers,
+            'submitted_at': datetime.datetime.now().isoformat(),
+            'valuation_status': 'pending',
+            'marks_awarded': None,
+            'total_marks_obtained': None,
+            'percentage': None
+        }
+        
+        # Save under student's roll number
+        exam_data['student_submissions'][roll_no] = submission
+        
+        # Update storage
+        all_exam_data[exam_id] = exam_data
+        save_answer_keys(all_exam_data)
+        
+        logging.info(f"✅ Saved submission for Roll No: {roll_no} to Exam: {exam_id}")
+        
+        return {"status": "Success", "message": "Student submission saved"}
+        
+    except Exception as e:
+        logging.error(f"Error saving student submission: {str(e)}")
+        raise
+    
+def get_exam_with_submissions(exam_id):
+    """Get complete exam data including all student submissions"""
+    try:
+        all_exam_data = load_answer_keys()
+        
+        if exam_id not in all_exam_data:
+            return None
+        
+        exam_data = all_exam_data[exam_id]
+        
+        # Return complete exam structure
+        return {
+            'exam_metadata': exam_data.get('exam_metadata', {}),
+            'question_types': exam_data.get('question_types', {}),
+            'question_marks': exam_data.get('question_marks', {}),
+            'teacher_answers': exam_data.get('teacher_answers', {}),
+            'student_submissions': exam_data.get('student_submissions', {}),
+            'total_students': len(exam_data.get('student_submissions', {}))
+        }
+        
+    except Exception as e:
+        logging.error(f"Error retrieving exam data: {str(e)}")
         raise
