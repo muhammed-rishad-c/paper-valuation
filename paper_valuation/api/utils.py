@@ -6,6 +6,12 @@ import tempfile
 from flask import jsonify
 from paper_valuation.logging.logger import logging
 from paper_valuation.api.vision_segmentation import detect_and_segment_image, get_document_annotation
+# Add these NEW imports at the top of utils.py
+from paper_valuation.components.valuation import (
+    evaluation_short_answer,
+    evaluation_long_answer
+)
+from paper_valuation.components.valuation import smart_paragraph_split
 
 
 ANSWER_KEYS_FILE = 'answer_keys.json'
@@ -347,6 +353,7 @@ def save_answer_key_util(data):
         
         short_answers = data.get('short_answers', {})
         long_answers = data.get('long_answers', {})
+        or_groups = data.get('or_groups', [])  # 🆕 NEW: Get OR groups
         
         if not all([exam_name, class_name, subject]):
             return {"status": "Failed", "error": "Missing required fields: exam_name, class_name, or subject"}
@@ -370,6 +377,7 @@ def save_answer_key_util(data):
         question_marks = {}
         total_marks = 0
         
+        # Process short question marks
         if short_questions and short_marks_str:
             try:
                 short_marks_list = parse_marks_string(short_marks_str, len(short_questions))
@@ -382,6 +390,7 @@ def save_answer_key_util(data):
         elif short_questions and not short_marks_str:
             return {"status": "Failed", "error": "Short questions specified but no marks provided"}
         
+        # Process long question marks
         if long_questions and long_marks_str:
             try:
                 long_marks_list = parse_marks_string(long_marks_str, len(long_questions))
@@ -397,6 +406,34 @@ def save_answer_key_util(data):
         if total_marks <= 0:
             return {"status": "Failed", "error": "Total marks must be greater than 0"}
         
+        # 🆕 NEW: Process OR groups
+        processed_or_groups = []
+        if or_groups:
+            logging.info(f"   ⚡ Processing {len(or_groups)} OR groups...")
+            for idx, group in enumerate(or_groups):
+                group_type = group.get('type')
+                
+                if group_type == 'single':
+                    options = group.get('options', [])
+                    if len(options) == 2:
+                        processed_or_groups.append({
+                            'type': 'single',
+                            'options': options
+                        })
+                        logging.info(f"      • Single OR: Q{options[0]} OR Q{options[1]}")
+                    
+                elif group_type == 'pair':
+                    option_a = group.get('option_a', [])
+                    option_b = group.get('option_b', [])
+                    if option_a and option_b:
+                        processed_or_groups.append({
+                            'type': 'pair',
+                            'option_a': option_a,
+                            'option_b': option_b
+                        })
+                        logging.info(f"      • Pair OR: Q{','.join(option_a)} OR Q{','.join(option_b)}")
+        
+        # Create exam data structure
         exam_data = {
             'exam_metadata': {
                 'exam_id': exam_id,
@@ -404,21 +441,24 @@ def save_answer_key_util(data):
                 'class': class_name,
                 'subject': subject,
                 'total_marks': total_marks,
-                'created_at': str(uuid.uuid4())  
+                'created_at': str(uuid.uuid4())
             },
             'question_types': question_types,
             'question_marks': question_marks,
-            'teacher_answers': {**short_answers, **long_answers},  
-            'student_submissions': {}  
+            'teacher_answers': {**short_answers, **long_answers},
+            'or_groups': processed_or_groups,  # 🆕 NEW: Store OR groups
+            'student_submissions': {}
         }
         
-        all_exam_data = load_answer_keys()  
+        all_exam_data = load_answer_keys()
         all_exam_data[exam_id] = exam_data
         save_answer_keys(all_exam_data)
         
         logging.info(f"✅ Answer key saved: {exam_id}")
         logging.info(f"   📊 {len(short_questions)} short + {len(long_questions)} long = {len(question_types)} total questions")
         logging.info(f"   💯 Total marks: {total_marks}")
+        if processed_or_groups:
+            logging.info(f"   ⚡ OR groups: {len(processed_or_groups)}")
         logging.info(f"   👥 Student submissions structure created (empty)")
         
         return {
@@ -426,7 +466,8 @@ def save_answer_key_util(data):
             "exam_id": exam_id,
             "message": "Answer key saved successfully",
             "question_count": len(question_types),
-            "total_marks": total_marks
+            "total_marks": total_marks,
+            "or_groups_count": len(processed_or_groups)  # 🆕 NEW
         }
         
     except Exception as e:
@@ -494,3 +535,259 @@ def get_exam_with_submissions(exam_id):
     except Exception as e:
         logging.error(f"Error retrieving exam data: {str(e)}")
         raise
+    
+def normalize_question_key(key, add_prefix=True):
+    """
+    Convert between Q1 ↔ 1
+    
+    Args:
+        key: "Q1" or "1" or 1
+        add_prefix: True → returns "Q1", False → returns "1"
+    
+    Examples:
+        normalize_question_key("Q1", add_prefix=False)  # → "1"
+        normalize_question_key("1", add_prefix=True)    # → "Q1"
+        normalize_question_key(1, add_prefix=True)      # → "Q1"
+    """
+    import re
+    
+    # Extract number from any format
+    if isinstance(key, int):
+        num = str(key)
+    else:
+        match = re.search(r'\d+', str(key))
+        num = match.group() if match else "0"
+    
+    # Return with or without Q prefix
+    return f"Q{num}" if add_prefix else num
+
+def evaluate_student_submission(exam_id, roll_no):
+    """
+    Evaluates a student's submission against teacher's answer key.
+    Handles OR questions by taking the best score.
+    
+    Args:
+        exam_id: The exam identifier
+        roll_no: Student's roll number
+        
+    Returns:
+        dict: Evaluation results with marks breakdown
+    """
+    try:
+        # Load exam data
+        all_exam_data = load_answer_keys()
+        
+        if exam_id not in all_exam_data:
+            return {"status": "Failed", "error": f"Exam {exam_id} not found"}
+        
+        exam_data = all_exam_data[exam_id]
+        
+        # Check if student submission exists
+        if roll_no not in exam_data.get('student_submissions', {}):
+            return {"status": "Failed", "error": f"Student {roll_no} submission not found"}
+        
+        student_data = exam_data['student_submissions'][roll_no]
+        
+        # Get all necessary data
+        teacher_answers = exam_data.get('teacher_answers', {})
+        student_answers = student_data.get('answers', {})
+        question_types = exam_data.get('question_types', {})
+        question_marks = exam_data.get('question_marks', {})
+        or_groups = exam_data.get('or_groups', [])  # 🆕 NEW: Get OR groups
+        
+        logging.info(f"🎯 Starting evaluation for Roll No: {roll_no}, Exam: {exam_id}")
+        logging.info(f"   Questions to evaluate: {len(student_answers)}")
+        if or_groups:
+            logging.info(f"   ⚡ OR groups detected: {len(or_groups)}")
+        
+        # Store results
+        marks_breakdown = {}
+        total_marks_obtained = 0.0
+        total_marks_possible = 0
+        
+        # 🆕 NEW: Track which questions are part of OR groups
+        or_question_map = {}  # {question_num: or_group_index}
+        for idx, group in enumerate(or_groups):
+            if group['type'] == 'single':
+                for q in group['options']:
+                    or_question_map[q] = idx
+            elif group['type'] == 'pair':
+                for q in group['option_a'] + group['option_b']:
+                    or_question_map[q] = idx
+        
+        # 🆕 NEW: Track OR group evaluations
+        or_group_scores = {}  # {group_index: {option: score}}
+        
+        # Evaluate each question
+        for q_label, student_ans in student_answers.items():
+            # Convert Q1 → 1 for metadata lookup
+            q_num = normalize_question_key(q_label, add_prefix=False)
+            
+            # Skip if question not in answer key
+            if q_num not in question_types:
+                logging.warning(f"   ⚠️ Question {q_label} not in answer key, skipping")
+                continue
+            
+            # Get question metadata
+            q_type = question_types[q_num]
+            max_marks = question_marks[q_num]
+            teacher_ans = teacher_answers.get(q_label, "")
+            
+            if not teacher_ans:
+                logging.warning(f"   ⚠️ No teacher answer for {q_label}, skipping")
+                continue
+            
+            # Evaluate based on question type
+            if q_type == "short":
+                score = evaluation_short_answer(
+                    student_answer=student_ans,
+                    teacher_answer=teacher_ans,
+                    max_mark=max_marks
+                )
+                logging.info(f"   ✅ {q_label} (Short): {score}/{max_marks}")
+                
+            elif q_type == "long":
+                # Split teacher answer into key points
+                keypoints = smart_paragraph_split(teacher_ans)
+                score = evaluation_long_answer(
+                    student_answer=student_ans,
+                    teacher_answer=keypoints,
+                    max_mark=max_marks
+                )
+                logging.info(f"   ✅ {q_label} (Long): {score}/{max_marks}")
+            else:
+                logging.warning(f"   ⚠️ Unknown question type '{q_type}' for {q_label}")
+                continue
+            
+            # 🆕 NEW: Check if this question is part of an OR group
+            if q_num in or_question_map:
+                group_idx = or_question_map[q_num]
+                if group_idx not in or_group_scores:
+                    or_group_scores[group_idx] = {}
+                or_group_scores[group_idx][q_num] = {
+                    'score': score,
+                    'max_marks': max_marks,
+                    'q_label': q_label,
+                    'q_type': q_type
+                }
+                logging.info(f"      ⚡ Part of OR group #{group_idx + 1}")
+            else:
+                # Regular question (not part of OR group)
+                marks_breakdown[q_label] = {
+                    "marks_obtained": score,
+                    "max_marks": max_marks,
+                    "question_type": q_type
+                }
+                total_marks_obtained += score
+                total_marks_possible += max_marks
+        
+        # 🆕 NEW: Process OR groups - take best score
+        for group_idx, group_data in or_group_scores.items():
+            group = or_groups[group_idx]
+            
+            if group['type'] == 'single':
+                # Single question OR - take max score
+                best_q = None
+                best_score = -1
+                
+                for q_num, data in group_data.items():
+                    if data['score'] > best_score:
+                        best_score = data['score']
+                        best_q = q_num
+                
+                if best_q:
+                    q_data = group_data[best_q]
+                    marks_breakdown[q_data['q_label']] = {
+                        "marks_obtained": q_data['score'],
+                        "max_marks": q_data['max_marks'],
+                        "question_type": q_data['q_type'],
+                        "or_group": True,
+                        "or_type": "single",
+                        "or_options": group['options'],
+                        "chosen_option": best_q
+                    }
+                    total_marks_obtained += q_data['score']
+                    total_marks_possible += q_data['max_marks']
+                    
+                    logging.info(f"   ⚡ OR Group (Single): Chose Q{best_q} with {q_data['score']}/{q_data['max_marks']}")
+            
+            elif group['type'] == 'pair':
+                # Pair OR - calculate totals for each pair
+                pair_a_total = 0
+                pair_a_max = 0
+                pair_b_total = 0
+                pair_b_max = 0
+                
+                for q_num in group['option_a']:
+                    if q_num in group_data:
+                        pair_a_total += group_data[q_num]['score']
+                        pair_a_max += group_data[q_num]['max_marks']
+                
+                for q_num in group['option_b']:
+                    if q_num in group_data:
+                        pair_b_total += group_data[q_num]['score']
+                        pair_b_max += group_data[q_num]['max_marks']
+                
+                # Take best pair
+                if pair_a_total >= pair_b_total:
+                    chosen_pair = 'a'
+                    chosen_questions = group['option_a']
+                    chosen_total = pair_a_total
+                    chosen_max = pair_a_max
+                else:
+                    chosen_pair = 'b'
+                    chosen_questions = group['option_b']
+                    chosen_total = pair_b_total
+                    chosen_max = pair_b_max
+                
+                # Add chosen pair questions to breakdown
+                for q_num in chosen_questions:
+                    if q_num in group_data:
+                        q_data = group_data[q_num]
+                        marks_breakdown[q_data['q_label']] = {
+                            "marks_obtained": q_data['score'],
+                            "max_marks": q_data['max_marks'],
+                            "question_type": q_data['q_type'],
+                            "or_group": True,
+                            "or_type": "pair",
+                            "or_pair_a": group['option_a'],
+                            "or_pair_b": group['option_b'],
+                            "chosen_pair": chosen_pair
+                        }
+                
+                total_marks_obtained += chosen_total
+                total_marks_possible += chosen_max
+                
+                logging.info(f"   ⚡ OR Group (Pair): Chose Pair {chosen_pair.upper()} with {chosen_total}/{chosen_max}")
+        
+        # Calculate percentage
+        percentage = (total_marks_obtained / total_marks_possible * 100) if total_marks_possible > 0 else 0
+        
+        # Update student submission with results
+        exam_data['student_submissions'][roll_no]['marks_awarded'] = marks_breakdown
+        exam_data['student_submissions'][roll_no]['total_marks_obtained'] = round(total_marks_obtained, 2)
+        exam_data['student_submissions'][roll_no]['percentage'] = round(percentage, 2)
+        exam_data['student_submissions'][roll_no]['valuation_status'] = 'completed'
+        
+        # Save back to JSON
+        all_exam_data[exam_id] = exam_data
+        save_answer_keys(all_exam_data)
+        
+        logging.info(f"✅ Evaluation completed: {total_marks_obtained}/{total_marks_possible} ({percentage:.2f}%)")
+        
+        return {
+            "status": "Success",
+            "roll_no": roll_no,
+            "student_name": student_data['student_info'].get('name', 'Unknown'),
+            "marks_breakdown": marks_breakdown,
+            "total_marks_obtained": round(total_marks_obtained, 2),
+            "total_marks_possible": total_marks_possible,
+            "percentage": round(percentage, 2),
+            "result": "Pass" if percentage >= 40 else "Fail"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error evaluating student submission: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return {"status": "Failed", "error": str(e)}

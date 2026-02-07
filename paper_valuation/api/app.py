@@ -13,7 +13,8 @@ from paper_valuation.api.utils import (
     save_answer_key_util,
     load_answer_keys,
     get_answer_key_by_id,
-    get_exam_with_submissions
+    get_exam_with_submissions,
+    evaluate_student_submission
 )
 
 app = Flask(__name__)
@@ -216,6 +217,102 @@ def get_complete_exam_data(exam_id):
     except Exception as e:
         logging.error(f"Error retrieving complete exam data: {str(e)}")
         return jsonify({"status": "Failed", "error": str(e)}), 500
+    
+@app.route('/api/evaluate_exam/<exam_id>', methods=['POST'])
+def evaluate_all_students_handler(exam_id):
+    """
+    Evaluate ALL students' submissions for an exam
+    
+    URL Parameters:
+        exam_id: The exam identifier
+        
+    Returns:
+        JSON with evaluation results for all students
+    """
+    try:
+        logging.info(f"{'='*20} 📝 BATCH EVALUATION REQUEST {'='*20}")
+        logging.info(f"Exam ID: {exam_id}")
+        
+        # Load exam data
+        exam_data = get_exam_with_submissions(exam_id)
+        
+        if not exam_data:
+            return jsonify({
+                "status": "Failed",
+                "error": f"Exam {exam_id} not found"
+            }), 404
+        
+        student_submissions = exam_data.get('student_submissions', {})
+        
+        if not student_submissions:
+            return jsonify({
+                "status": "Failed",
+                "error": "No student submissions found for this exam"
+            }), 404
+        
+        logging.info(f"📊 Found {len(student_submissions)} students to evaluate")
+        
+        # Evaluate each student
+        evaluation_results = []
+        successful = 0
+        failed = 0
+        
+        for roll_no in student_submissions.keys():
+            logging.info(f"   Evaluating Roll No: {roll_no}...")
+            
+            result = evaluate_student_submission(exam_id, roll_no)
+            
+            if result['status'] == 'Success':
+                evaluation_results.append(result)
+                successful += 1
+                logging.info(f"   ✅ Roll No {roll_no}: {result['total_marks_obtained']}/{result['total_marks_possible']} ({result['percentage']}%)")
+            else:
+                failed += 1
+                logging.error(f"   ❌ Roll No {roll_no}: {result.get('error')}")
+                evaluation_results.append({
+                    "status": "Failed",
+                    "roll_no": roll_no,
+                    "error": result.get('error')
+                })
+        
+        logging.info(f"✅ Batch evaluation completed: {successful} successful, {failed} failed")
+        
+        return jsonify({
+            "status": "Success",
+            "exam_id": exam_id,
+            "exam_name": exam_data['exam_metadata'].get('exam_name'),
+            "total_students": len(student_submissions),
+            "evaluated_successfully": successful,
+            "evaluation_failed": failed,
+            "results": evaluation_results
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Error in evaluate_all_students_handler: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return jsonify({"status": "Failed", "error": str(e)}), 500
+    
+@app.route('/api/evaluate_student/<exam_id>/<roll_no>', methods=['POST'])
+def evaluate_single_student_handler(exam_id, roll_no):
+    """
+    Evaluate a SINGLE student's submission (optional endpoint)
+    
+    Useful for re-evaluation or checking one student
+    """
+    try:
+        logging.info(f"📝 Single student evaluation: Exam {exam_id}, Roll {roll_no}")
+        
+        result = evaluate_student_submission(exam_id, roll_no)
+        
+        if result['status'] == 'Success':
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        logging.error(f"Error evaluating student: {str(e)}")
+        return jsonify({"status": "Failed", "error": str(e)}), 500
 
 
 
@@ -232,6 +329,8 @@ if __name__ == '__main__':
     print("  • GET  /api/get_answer_key/<exam_id> - Retrieve answer key")
     print("  • GET  /api/list_answer_keys - List all answer keys")
     print("  • POST /api/seriesBundleEvaluate - Batch evaluation (with answer key support)")
+    print("  • POST /api/evaluate_exam/<exam_id> - Evaluate ALL students in exam")  # ← MAIN ONE
+    print("  • POST /api/evaluate_student/<exam_id>/<roll_no> - Evaluate single student")  # ← OPTIONAL
     print("="*70)
     print("Server running on http://localhost:5000")
     print("="*70)
