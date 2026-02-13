@@ -1,12 +1,12 @@
 {
-  "AI_S8_AI_midterm_2026_AC2A1CF4": {
+  "AI_S8_AI_midterm_2026_1F041201": {
     "exam_metadata": {
-      "exam_id": "AI_S8_AI_midterm_2026_AC2A1CF4",
+      "exam_id": "AI_S8_AI_midterm_2026_1F041201",
       "exam_name": "AI midterm 2026",
       "class": "S8",
       "subject": "AI",
       "total_marks": 25,
-      "created_at": "b6a29667-c38d-46f4-ab60-e9df649a885f"
+      "created_at": "55e2fc50-57a9-40ac-961b-0ab6677ee71d"
     },
     "question_types": {
       "1": "short",
@@ -23,11 +23,11 @@
       "5": 8
     },
     "teacher_answers": {
-      "Q1": "artificial intelligence is the simulation of human intelligence processes by machines, tran especially, computer system these processes include learning",
-      "Q2": "machine learning is a subset of Al that enables system to automatically learn and improve from experience without being explicitly programmed. It focuse Shib on developing computer program that can access data noepsb",
-      "Q3": "Supervised leasining uses labeled training data where the algorithm learns from input-output pairs, while unsupervised learning work with unlabeled data Eng to find hidden pattern and structures dubbo without predefined categories he papbaie ban",
-      "Q4": "apifolumi h\n\n\u2022 an expert system 23809 key components consist of Several\n\n\u2022 knowledge base: this is the care component to that store domain-specific knowledge facts, rules, and heuristic gathered from.\n\nhuman experts of toon foodw as/dpra\n\nDe Inference engine: this component apples trilogical rules to the knowledge base to to deduce new information and make plob easi00 CLO decision pornic bats\n\n\u2022 user interface: allows users to interact with the System, ask question and bal receive explanation for the System preasoning togloo-lugnt.\n\nof knowledge acquisition module: Helps in adding new knowledge to the System and updating existing knowledge. C",
-      "Q5": "\u2022 Health care: Al assists in disease diagnosis, drug discovery, personalized treatment plan and medical image andlyss machine learning algorithms can defect patterns in medical data\n\n\u2022 Finance: used for fraud detection, algorithmic trading, credit scoring and risk assessment\n\n\u2022 Transportation: Self driving cars use computer vision, Sensor fusion, and\n\ndeep learning. Al optimizes traffic management\n\n\u2022 Education intelligent tutoring Systems provide personalized learing algorithm Al help in automated grading and Student performance analysis"
+      "Q1": "artificial intelligence is the simulation of human intelligence processes by machines,\n\ntran especially, computer system these processes include learning",
+      "Q2": "machine learning is a subset of Al that enables system to automatically learn and improve from experience without being explicitly programmed. It focuse\n\nShib on developing computer program that can access data noepsb",
+      "Q3": "Supervised leasining uses labeled training data where the algorithm learns from input\n\n-output pairs, while unsupervised learning work with unlabeled data\n\nEng to find hidden pattern and structures dubbo without predefined categories he papbaie ban",
+      "Q4": "apifolumi h\n\n\u2022 an expert system 23809 key components consist of Several\n\n\u2022 knowledge base: this is the care component\n\nto that store domain\n\n-specific knowledge facts, rules, and heuristic gathered from.\n\nhuman experts of toon foodw as/dpra\n\nDe Inference engine: this component apples\n\ntrilogical rules to the knowledge base to to deduce new information and make plob easi00 CLO decision pornic bats\n\n\u2022 user interface: allows users to interact with the System, ask question and bal receive explanation for the System\n\npreasoning togloo\n\n-lugnt.\n\nof knowledge acquisition module: Helps in adding new knowledge to the System and updating existing knowledge. C",
+      "Q5": "\u2022 Health care: Al assists in disease diagnosis, drug discovery, personalized treatment plan and medical image andlyss machine learning algorithms can defect patterns in medical data\n\n\u2022 Finance: used for fraud detection, algorithmic trading, credit scoring and risk assessment\n\n\u2022 Transportation: Self driving cars use computer vision, Sensor fusion, and deep learning. Al optimizes traffic management\n\n\u2022 Education intelligent tutoring Systems provide personalized learing algorithm\n\nAl help in automated grading and Student performance analysis"
     },
     "or_groups": [
       {
@@ -47,13 +47,13 @@
           "roll_no": "45"
         },
         "answers": {
-          "Q1": "Artifical intelligence refer to computer System dua that can perform task requiring human intelligent such as visual perception, Speech secognition, decision-making and language translation. Al System learn from data and experience to improve their performance over dime",
+          "Q1": "Artifical intelligence refer to computer System\n\ndua that can perform task requiring human intelligent such as visual perception, Speech secognition, decision\n\n-making and language translation. Al System learn from data and experience to improve their performance over dime",
           "Q2": "Machine learning is an application of artific ial intelligence where computers learn from data automatically. It uses algaethm and statistical model to analyse pattern in data and make predictions or decision without explicit programming for specific Hasks",
           "Q3": "In Supervised learning the algorithm is drained on label data with known input and output, learning to map input to correct output unsupervised learning work with unlabeled data, discovering hidden patterns, groupings, ar structures in the data without predefined categories ar guidance",
-          "Q4": "knowledge base stories all the facts, rules\n\nand information from domain experts\n\nIn a structured format using production\n\nrules or Semantic networks\n\nInference engine processes the knowledge\n\nbase using reasoning mechanisms like\n\nforward chaining starting from facts to\n\nconclusions or backward chaining\n\nStarting from goals to facts\n\nuser interface provides the interaction\n\nlayer which user can speak inpelt queries\n\nreceive answers and view results in an\n\nendesistandable format explanation facility justifies the Systern\n\nconclusion by tracing the reasoning\n\npath and explaining why certain\n\ndecision were made\n\nknowledge acquisition module helps expert\n\nand new rules and update existing\n\nknowledge Systematically",
-          "Q5": "Healthcar sector uses Al for early\n\ndisease through pattern recognition\n\nin medical images, predicting patient\n\noutcomes and developing personalized\n\ntreatment strategies based on genetic\n\ndata\n\nfinancial service emplay Al for detecting\n\nfraudulent tranglaction in real time\n\nautomating trading decisions, assessing\n\ncredit ristes and providing personalized\n\nfinancial advice education System use Al for adaption\n\nlearning platform that adjust to\n\nStudent pace, automated assessment\n\ntools and virtual tutors that provide\n\npersonalized guidance\n\nCustomer Service benefits from Al\n\nchatbot handling routine queries\n\nSentiment analysis for feedback and\n\nrecommendation Systems Suggesting\n\nproduct based on user behavior"
+          "Q4": "knowledge base stories all the facts, rules and information from domain experts In a structured format using production rules or Semantic networks Inference engine processes the knowledge base using reasoning mechanisms like forward chaining starting from facts to conclusions or backward chaining Starting from goals to facts\n\nuser interface provides the interaction layer which user can speak inpelt queries receive answers and view results in an endesistandable format explanation facility justifies the Systern conclusion by tracing the reasoning path and explaining why certain decision were made\n\nknowledge acquisition module helps expert and new rules and update existing knowledge Systematically",
+          "Q5": "Healthcar sector uses Al for early disease through pattern recognition in medical images, predicting patient outcomes and developing personalized treatment strategies based on genetic data\n\nfinancial service emplay Al for detecting fraudulent tranglaction in real time automating trading decisions, assessing credit ristes and providing personalized financial advice education System use Al for adaption learning platform that adjust to Student pace, automated assessment tools and virtual tutors that provide personalized guidance\n\nCustomer Service benefits from Al chatbot handling routine queries Sentiment analysis for feedback and recommendation Systems Suggesting product based on user behavior"
         },
-        "submitted_at": "2026-02-07T11:17:11.819933",
+        "submitted_at": "2026-02-07T21:33:45.113406",
         "valuation_status": "completed",
         "marks_awarded": {
           "Q1": {
@@ -86,6 +86,42 @@
         },
         "total_marks_obtained": 10.0,
         "percentage": 58.82
+      },
+      "38": {
+        "student_info": {
+          "name": "GAURI PRIYA",
+          "class": "S8",
+          "subject": "AI",
+          "roll_no": "38"
+        },
+        "answers": {
+          "Q1": "A1 is the stimulation of human intelligence by computer cystems. It involves machine performing tasks learning from date, logical reasoning and Correcting\n\nG their own errer over\n\nQ22 Machine learning is a subset of A1 that allowe System to improve automatically from experience The key is that they learn without being explicitly programmed for every specific tack",
+          "Q4": "\u2022 The knowledge Base is the heart of the System. It contain specific facts and rules provided human experts. It serve as source of information the Al uses problems primary to solve\n\n\u2022 Next is the interface Engine. This is the reasoning aap components. It uses logic\n\n-like forward or backward chaining to process the knowledge base.",
+          "Q13": "Supervised learning uses labeled data were the answer is known unsupervised learning nees unlabeled data to find hidden struct ures or patterns without any prior guida\n\na QH \u2022 Finally, the wier interface and Explanation facility allow humans to interact with the system. 25 In health care, Al is med medical images like trays diseases fore analysing detect \" In financial sector, algorithms doat front detect fraudulent transactions by spotting unusual spending pattern In Transportation, Al is the brain behind autonomari vehicles, using computer vision to navigate reads. \u2022 Laitly, in Customer Service, Al chat bats provide 24/7 support. They use natural language processing to understand and questions instantly without answer Customer human intervention"
+        },
+        "submitted_at": "2026-02-07T21:33:48.347354",
+        "valuation_status": "completed",
+        "marks_awarded": {
+          "Q1": {
+            "marks_obtained": 0,
+            "max_marks": 3,
+            "question_type": "short"
+          },
+          "Q4": {
+            "marks_obtained": 2.5,
+            "max_marks": 8,
+            "question_type": "long",
+            "or_group": true,
+            "or_type": "single",
+            "or_options": [
+              "4",
+              "5"
+            ],
+            "chosen_option": "4"
+          }
+        },
+        "total_marks_obtained": 2.5,
+        "percentage": 22.73
       }
     }
   }

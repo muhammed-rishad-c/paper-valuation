@@ -4,6 +4,7 @@ import io
 import os
 import re
 from typing import Dict, List, Optional, Tuple
+from paper_valuation.api.enhanced_vision_segmentation import reconstruct_answer_text_adaptive
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -389,12 +390,10 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
         if debug:
             print(f"\n   Processing {boundary['label']} as '{answer_type}' answer")
         
-        if answer_type == 'long':
-            answer_text = reconstruct_answer_text_formatted(
-                word_data, start_idx, end_idx, is_handwritten=is_handwritten
-            )
-        else:
-            answer_text = reconstruct_answer_text(word_data, start_idx, end_idx)
+        # Use enhanced adaptive reconstruction for ALL answer types
+        answer_text = reconstruct_answer_text_adaptive(
+            word_data, start_idx, end_idx, is_handwritten=is_handwritten
+        )
         
         answer_text = clean_answer_text(answer_text, boundary['q_number'])
         
