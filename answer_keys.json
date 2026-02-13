@@ -124,5 +124,46 @@
         "percentage": 22.73
       }
     }
+  },
+  "AI_S8_helo_man_4FEC9D20": {
+    "exam_metadata": {
+      "exam_id": "AI_S8_helo_man_4FEC9D20",
+      "exam_name": "helo man",
+      "class": "S8",
+      "subject": "AI",
+      "total_marks": 25,
+      "created_at": "b4d9f90d-f9d9-407e-beb9-c4ad3bc89df7"
+    },
+    "question_types": {
+      "1": "short",
+      "2": "short",
+      "3": "short",
+      "4": "long",
+      "5": "long"
+    },
+    "question_marks": {
+      "1": 3,
+      "2": 3,
+      "3": 3,
+      "4": 8,
+      "5": 8
+    },
+    "teacher_answers": {
+      "Q1": "artificial intelligence is, the Simulation of 15.\n\nhuman intelligence processes by machines,\n\ntran especially, computer system these processes\n\ninclude learning",
+      "Q2": "machine learning is a subset of Al that enables system to automatically learn and improve from experience without mpe being explicitly programmed. It focuse\n\nShib on developing computer program that can access data noepsb",
+      "Q3": "Supervised leasining uses labeled training data where the algorithm learns from input\n\n-output pairs, while unsupervised learning work with unlabeled data\n\nEng to find hidden pattern and structures dubbo without predefined categories papbaie ban",
+      "Q4": "apifolumi h\n\n\u2022 an expert system 23809 key components consist of Several\n\n\u2022 knowledge base: this is the care component\n\nto that store domain\n\n-specific knowledge\n\nch facts, rules, and heuristic gathesied from, human experts of toon foodw as/dprs\n\nDe Inference engine: this component apples\n\ntrilogical rules to the knowledge base to to deduce new information and make plob easi00 CLO decision pornic bats\n\n\u2022 user interface: allows users to interact with the System, ask question and bio receive explanation for the System\n\npreasoning togloo\n\n-lugnt.\n\nof knowledge acquisition module: Helps in adding new knowledge to the System and updating existing knowledge. C",
+      "Q5": "\u2022 Health care: Al assists in disease diagnosis, drug discovery, personalized treatment plan and medical image andlyss machine learning algorithms can defect patterns in medical data\n\n\u2022 Finance: used for fraud detection, algorithmic trading, credit scoring and risk assessment\n\n\u2022 Transportation: Self driving cars use computer vision, Sensor fusion, and deep learning. Al optimizes traffic management\n\n\u2022 Education intelligent tutoring Systems provide personalized learing algorithm\n\nAl help in automated grading and Student performance analysis"
+    },
+    "or_groups": [
+      {
+        "type": "single",
+        "options": [
+          "4",
+          "5"
+        ]
+      }
+    ],
+    "student_submissions": {}
   }
 }
