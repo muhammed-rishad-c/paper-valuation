@@ -5,6 +5,7 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 from paper_valuation.api.enhanced_vision_segmentation import reconstruct_answer_text_adaptive
+from paper_valuation.logging.logger import logging
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -185,25 +186,6 @@ def validate_question_sequence(boundaries: List[Dict], strict: bool = True, expe
     return is_valid, missing, warnings, info
 
 
-
-def reconstruct_answer_text(words: List[Dict], start_idx: int, end_idx: Optional[int] = None) -> str:
-   
-    if end_idx is None:
-        end_idx = len(words)
-    
-    answer_parts = []
-    
-    for i in range(start_idx, min(end_idx, len(words))):
-        word = words[i]
-        answer_parts.append(word['text'])
-        
-        if word['has_space_after'] and i < end_idx - 1:
-            answer_parts.append(' ')
-    
-    return ''.join(answer_parts).strip()
-
-
-
 def reconstruct_answer_text_formatted(words: List[Dict], start_idx: int, end_idx: Optional[int] = None, 
                                       is_handwritten: bool = True) -> str:
     if end_idx is None:
@@ -307,9 +289,10 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     word_data = extract_word_level_data(document_annotation)
     
     if debug:
-        print(f"\n{'='*70}")
-        print(f"📄 DOCUMENT ANALYSIS - Extracted {len(word_data)} words")
-        print(f"📝 Document type: {'HANDWRITTEN (Student)' if is_handwritten else 'PRINTED (Teacher)'}")
+        logging.info("="*70)
+        logging.info(f"DOCUMENT ANALYSIS - {len(word_data)} words")
+        logging.info(f"Type: {'HANDWRITTEN' if is_handwritten else 'PRINTED'}")
+        logging.info("="*70)
         if question_types:
             print(f"📋 Using answer key configuration:")
             short_count = len([t for t in question_types.values() if t == 'short'])

@@ -70,22 +70,18 @@ def merge_multi_page_result(all_pages_list):
             
             if last_q_label and last_q_label in merged_answers:
                 merged_answers[last_q_label] += " " + unlabeled_text.strip()
-                #print(f"⚠️  Page {page_index + 1}: Unlabeled continuation appended to {last_q_label}")
             else:
                 if 'Q1' in merged_answers:
                     merged_answers['Q1'] = unlabeled_text.strip() + " " + merged_answers['Q1']
                 else:
                     merged_answers['Q1'] = unlabeled_text.strip()
                 last_q_label = 'Q1'
-                #print(f"⚠️  Page {page_index + 1}: Unlabeled page assigned to Q1 by default")
 
         for q_label, text in answers.items():
             if q_label in merged_answers:
                 merged_answers[q_label] += " " + text.strip()
-                print(f"✅ Page {page_index + 1}: {q_label} continuation merged")
             else:
                 merged_answers[q_label] = text.strip()
-                print(f"✅ Page {page_index + 1}: Added {q_label}")
             
             last_q_label = q_label
     

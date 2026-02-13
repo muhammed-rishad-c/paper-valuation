@@ -416,31 +416,3 @@ def segment_answers_enhanced(document_annotation, debug=True, config=None):
     }
 
 
-# ===============================================
-# USAGE EXAMPLE
-# ===============================================
-
-"""
-TO USE THIS ENHANCED VERSION:
-
-1. In your vision_segmentation.py, add this import at the top:
-   
-   from enhanced_vision_segmentation import reconstruct_answer_text_adaptive
-
-2. In segment_answers(), replace the reconstruction call:
-
-   OLD:
-   if answer_type == 'long':
-       answer_text = reconstruct_answer_text_formatted(words, start_idx, end_idx, is_handwritten)
-   else:
-       answer_text = reconstruct_answer_text(words, start_idx, end_idx)
-   
-   NEW:
-   answer_text = reconstruct_answer_text_adaptive(words, start_idx, end_idx, is_handwritten)
-   # This works for BOTH short and long answers!
-
-3. That's it! The adaptive version will automatically:
-   - Learn the document's line spacing
-   - Detect paragraphs using multiple signals
-   - Handle both short and long answers correctly
-"""

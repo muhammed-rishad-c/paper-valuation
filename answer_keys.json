@@ -53,7 +53,7 @@
           "Q4": "knowledge base stories all the facts, rules and information from domain experts In a structured format using production rules or Semantic networks Inference engine processes the knowledge base using reasoning mechanisms like forward chaining starting from facts to conclusions or backward chaining Starting from goals to facts\n\nuser interface provides the interaction layer which user can speak inpelt queries receive answers and view results in an endesistandable format explanation facility justifies the Systern conclusion by tracing the reasoning path and explaining why certain decision were made\n\nknowledge acquisition module helps expert and new rules and update existing knowledge Systematically",
           "Q5": "Healthcar sector uses Al for early disease through pattern recognition in medical images, predicting patient outcomes and developing personalized treatment strategies based on genetic data\n\nfinancial service emplay Al for detecting fraudulent tranglaction in real time automating trading decisions, assessing credit ristes and providing personalized financial advice education System use Al for adaption learning platform that adjust to Student pace, automated assessment tools and virtual tutors that provide personalized guidance\n\nCustomer Service benefits from Al chatbot handling routine queries Sentiment analysis for feedback and recommendation Systems Suggesting product based on user behavior"
         },
-        "submitted_at": "2026-02-07T21:33:45.113406",
+        "submitted_at": "2026-02-13T20:34:00.205701",
         "valuation_status": "completed",
         "marks_awarded": {
           "Q1": {

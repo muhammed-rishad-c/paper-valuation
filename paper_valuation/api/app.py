@@ -19,28 +19,6 @@ from paper_valuation.api.utils import (
 
 app = Flask(__name__)
 
-
-
-@app.route('/api/evaluate', methods=['POST'])
-def evaluate_paper_endpoint():
-    try:
-        files = request.files.getlist('paper_images') 
-        
-        if not files or files[0].filename == '':
-            logging.error("No images found in the request.")
-            return jsonify({"status": "Failed", "error": "No images provided."}), 400
-        
-        logging.info("="*70)
-        logging.info(f"Individual Valuation: Processing {len(files)} pages.")
-        logging.info("="*70)
-        
-        results = evaluate_paper_individual(files)
-        return results
-
-    except Exception as e:
-        error_message = f"Critical System Error: {str(e)}\n{traceback.format_exc()}"
-        logging.error(error_message)
-        return jsonify({"status": "Failed", "error": str(e)}), 500
     
 @app.route('/api/evaluate_individual', methods=['POST'])
 def evaluate_individual_endpoint():
@@ -558,7 +536,6 @@ if __name__ == '__main__':
     print("🚀 Starting Flask Paper Valuation Service")
     print("="*70)
     print("Available Endpoints:")
-    print("  • POST /api/evaluate - Individual paper evaluation")
     print("  • POST /api/extract_answer_key_text - Extract answer key (real-time)")
     print("  • POST /api/save_answer_key - Save complete answer key")
     print("  • GET  /api/get_answer_key/<exam_id> - Retrieve answer key")
