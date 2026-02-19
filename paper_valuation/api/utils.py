@@ -12,6 +12,7 @@ from paper_valuation.components.valuation import (
     evaluation_long_answer
 )
 from paper_valuation.components.valuation import smart_paragraph_split
+from flask import request
 
 
 ANSWER_KEYS_FILE = 'answer_keys.json'
@@ -217,18 +218,50 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
             'is_handwritten': True  
         }
         
-        if exam_id:
-            answer_key = get_answer_key_by_id(exam_id)
-            if answer_key:
-                question_types = answer_key.get('question_types', {})
+        config = {
+            'is_handwritten': True  
+        }
+
+# 🆕 NEW: Try to get exam data from Node.js (sent as JSON string)
+
+        exam_data_str = request.form.get('exam_data')
+
+        if exam_data_str:
+            try:
+            # Parse exam data sent from Node.js
+                exam_data = json.loads(exam_data_str)
+                question_types = exam_data.get('question_types', {})
                 config['question_types'] = question_types
                 
-                exam_name = answer_key.get('exam_metadata', {}).get('exam_name', answer_key.get('exam_name', 'Unknown'))
-                logging.info(f"✅ Loaded answer key: {exam_name}")
+                exam_name = exam_data.get('exam_name', 'Unknown')
+                exam_id = exam_data.get('exam_id', exam_id)  # Use exam_id from data
+                
+                logging.info(f"✅ Received exam data from Node.js: {exam_name}")
+                logging.info(f"   Exam ID: {exam_id}")
                 logging.info(f"   Question types: {len([q for q in question_types.values() if q == 'short'])} short, "
-                           f"{len([q for q in question_types.values() if q == 'long'])} long")
+                        f"{len([q for q in question_types.values() if q == 'long'])} long")
+            
+            except Exception as e:
+                logging.error(f"❌ Failed to parse exam_data from Node.js: {str(e)}")
+                exam_data = None
+                exam_id = None
+        else:
+    # Fallback: try old method (for backward compatibility with old JSON system)
+            if exam_id:
+                logging.warning(f"⚠️ No exam_data received from Node.js, trying old JSON lookup...")
+                answer_key = get_answer_key_by_id(exam_id)
+                if answer_key:
+                    question_types = answer_key.get('question_types', {})
+                    config['question_types'] = question_types
+                    
+                    exam_name = answer_key.get('exam_metadata', {}).get('exam_name', answer_key.get('exam_name', 'Unknown'))
+                    logging.info(f"✅ Loaded answer key from JSON: {exam_name}")
+                else:
+                    logging.warning(f"⚠️ Exam ID {exam_id} not found in JSON. Using default settings.")
+                    exam_id = None
             else:
-                logging.warning(f"⚠️ Exam ID {exam_id} not found. Using default settings.")
+                logging.info("ℹ️ No exam_id or exam_data provided - using default OCR settings")
+                exam_id = None
         
         all_pages_result = []
         for index, file in enumerate(answer_files):
@@ -247,21 +280,15 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
         final_valuation = merge_multi_page_result(all_pages_result)
         
         if exam_id and student_info['roll_no'] != 'Unknown':
+    # Check if exam exists in JSON (old system)
             try:
-                save_result = save_student_submission(
-                    exam_id=exam_id,
-                    roll_no=student_info['roll_no'],
-                    student_info=student_info,
-                    answers=final_valuation['answers']
-                )
-                logging.info(f"✅ Saved student {student_info['roll_no']} to exam {exam_id}")
+                all_exam_data = load_answer_keys()
+                if exam_id:
+                    logging.info(f"ℹ️ Student {student_info.get('roll_no', 'Unknown')} - Node.js will save to PostgreSQL")
+                else:
+                    logging.warning("⚠️ No exam_id provided - student data will not be saved")
             except Exception as save_error:
                 logging.error(f"⚠️ Failed to save student submission: {str(save_error)}")
-        else:
-            if not exam_id:
-                logging.warning("⚠️ No exam_id provided - student submission not saved to storage")
-            if student_info['roll_no'] == 'Unknown':
-                logging.warning("⚠️ Roll number is Unknown - student submission not saved to storage")
             
         return jsonify({
             "status": "Success",
@@ -475,6 +502,7 @@ def save_answer_key_util(data):
     
     
 def save_student_submission(exam_id, roll_no, student_info, answers):
+    
     try:
         all_exam_data = load_answer_keys()
         
@@ -784,6 +812,175 @@ def evaluate_student_submission(exam_id, roll_no):
         
     except Exception as e:
         logging.error(f"Error evaluating student submission: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return {"status": "Failed", "error": str(e)}
+    
+def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
+    """
+    Evaluate a student using exam data provided by Node.js
+    (Does NOT access answer_keys.json)
+    """
+    try:
+        # Get data from provided exam_data (not from JSON file)
+        teacher_answers = exam_data.get('teacher_answers', {})
+        student_answers = student_data.get('answers', {})
+        question_types = exam_data.get('question_types', {})
+        question_marks = exam_data.get('question_marks', {})
+        or_groups = exam_data.get('or_groups', [])
+        
+        logging.info(f"🎯 Evaluating Roll No: {roll_no} with provided exam data")
+        logging.info(f"   Questions to evaluate: {len(student_answers)}")
+        
+        # Rest is same as evaluate_student_submission function
+        marks_breakdown = {}
+        total_marks_obtained = 0.0
+        total_marks_possible = 0
+        
+        # Track OR groups
+        or_question_map = {}
+        for idx, group in enumerate(or_groups):
+            if group['type'] == 'single':
+                for q in group['options']:
+                    or_question_map[str(q)] = idx
+            elif group['type'] == 'pair':
+                for q in group.get('option_a', []) + group.get('option_b', []):
+                    or_question_map[str(q)] = idx
+        
+        or_group_scores = {}
+        
+        # Evaluate each question
+        for q_label, student_ans in student_answers.items():
+            q_num = normalize_question_key(q_label, add_prefix=False)
+            
+            if q_num not in question_types:
+                logging.warning(f"   ⚠️ Question {q_label} not in answer key, skipping")
+                continue
+            
+            q_type = question_types[q_num]
+            max_marks = question_marks.get(q_num, 0)
+            teacher_ans = teacher_answers.get(q_label, "")
+            
+            if not teacher_ans:
+                logging.warning(f"   ⚠️ No teacher answer for {q_label}, skipping")
+                continue
+            
+            # Evaluate based on question type
+            if q_type == "short":
+                score = evaluation_short_answer(
+                    student_answer=student_ans,
+                    teacher_answer=teacher_ans,
+                    max_mark=max_marks
+                )
+            elif q_type == "long":
+                keypoints = smart_paragraph_split(teacher_ans)
+                score = evaluation_long_answer(
+                    student_answer=student_ans,
+                    teacher_answer=keypoints,
+                    max_mark=max_marks
+                )
+            else:
+                continue
+            
+            # Handle OR groups (same logic as before)
+            if q_num in or_question_map:
+                group_idx = or_question_map[q_num]
+                if group_idx not in or_group_scores:
+                    or_group_scores[group_idx] = {}
+                or_group_scores[group_idx][q_num] = {
+                    'score': score,
+                    'max_marks': max_marks,
+                    'q_label': q_label,
+                    'q_type': q_type
+                }
+            else:
+                marks_breakdown[q_label] = {
+                    "marks_obtained": score,
+                    "max_marks": max_marks,
+                    "question_type": q_type
+                }
+                total_marks_obtained += score
+                total_marks_possible += max_marks
+        
+        # Process OR groups (same logic as evaluate_student_submission)
+        for group_idx, group_data in or_group_scores.items():
+            group = or_groups[group_idx]
+            
+            if group['type'] == 'single':
+                best_q = None
+                best_score = -1
+                
+                for q_num, data in group_data.items():
+                    if data['score'] > best_score:
+                        best_score = data['score']
+                        best_q = q_num
+                
+                if best_q:
+                    q_data = group_data[best_q]
+                    marks_breakdown[q_data['q_label']] = {
+                        "marks_obtained": q_data['score'],
+                        "max_marks": q_data['max_marks'],
+                        "question_type": q_data['q_type'],
+                        "or_group": True,
+                        "or_type": "single",
+                        "or_options": group['options'],
+                        "chosen_option": best_q
+                    }
+                    total_marks_obtained += q_data['score']
+                    total_marks_possible += q_data['max_marks']
+            
+            elif group['type'] == 'pair':
+                pair_a_total = sum(group_data[q]['score'] for q in group.get('option_a', []) if q in group_data)
+                pair_a_max = sum(group_data[q]['max_marks'] for q in group.get('option_a', []) if q in group_data)
+                pair_b_total = sum(group_data[q]['score'] for q in group.get('option_b', []) if q in group_data)
+                pair_b_max = sum(group_data[q]['max_marks'] for q in group.get('option_b', []) if q in group_data)
+                
+                if pair_a_total >= pair_b_total:
+                    chosen_pair = 'a'
+                    chosen_questions = group.get('option_a', [])
+                    chosen_total = pair_a_total
+                    chosen_max = pair_a_max
+                else:
+                    chosen_pair = 'b'
+                    chosen_questions = group.get('option_b', [])
+                    chosen_total = pair_b_total
+                    chosen_max = pair_b_max
+                
+                for q_num in chosen_questions:
+                    if q_num in group_data:
+                        q_data = group_data[q_num]
+                        marks_breakdown[q_data['q_label']] = {
+                            "marks_obtained": q_data['score'],
+                            "max_marks": q_data['max_marks'],
+                            "question_type": q_data['q_type'],
+                            "or_group": True,
+                            "or_type": "pair",
+                            "or_pair_a": group.get('option_a', []),
+                            "or_pair_b": group.get('option_b', []),
+                            "chosen_pair": chosen_pair
+                        }
+                
+                total_marks_obtained += chosen_total
+                total_marks_possible += chosen_max
+        
+        # Calculate percentage
+        percentage = (total_marks_obtained / total_marks_possible * 100) if total_marks_possible > 0 else 0
+        
+        logging.info(f"✅ Evaluation completed: {total_marks_obtained}/{total_marks_possible} ({percentage:.2f}%)")
+        
+        return {
+            "status": "Success",
+            "roll_no": roll_no,
+            "student_name": student_data.get('student_info', {}).get('name', 'Unknown'),
+            "marks_breakdown": marks_breakdown,
+            "total_marks_obtained": round(total_marks_obtained, 2),
+            "total_marks_possible": total_marks_possible,
+            "percentage": round(percentage, 2),
+            "result": "Pass" if percentage >= 40 else "Fail"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error evaluating student: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
         return {"status": "Failed", "error": str(e)}

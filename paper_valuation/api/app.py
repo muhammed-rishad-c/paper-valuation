@@ -14,7 +14,8 @@ from paper_valuation.api.utils import (
     load_answer_keys,
     get_answer_key_by_id,
     get_exam_with_submissions,
-    evaluate_student_submission
+    evaluate_student_submission,
+    evaluate_student_with_exam_data 
 )
 
 app = Flask(__name__)
@@ -525,6 +526,79 @@ def evaluate_single_student_handler(exam_id, roll_no):
             
     except Exception as e:
         logging.error(f"Error evaluating student: {str(e)}")
+        return jsonify({"status": "Failed", "error": str(e)}), 500
+    
+@app.route('/api/evaluate_exam_with_data', methods=['POST'])
+def evaluate_exam_with_complete_data():
+    """
+    Evaluate ALL students using exam data sent from Node.js
+    (Does NOT look up in answer_keys.json)
+    """
+    try:
+        # Get complete exam data from request body
+        exam_data = request.get_json()
+        
+        if not exam_data:
+            return jsonify({
+                "status": "Failed",
+                "error": "No exam data received"
+            }), 400
+        
+        exam_id = exam_data.get('exam_id')
+        student_submissions = exam_data.get('student_submissions', {})
+        
+        logging.info(f"{'='*20} 📝 BATCH EVALUATION (PostgreSQL Data) {'='*20}")
+        logging.info(f"Exam ID: {exam_id}")
+        logging.info(f"Exam Name: {exam_data.get('exam_name')}")
+        
+        if not student_submissions:
+            return jsonify({
+                "status": "Failed",
+                "error": "No student submissions found"
+            }), 404
+        
+        logging.info(f"📊 Found {len(student_submissions)} students to evaluate")
+        
+        # Evaluate each student using the provided exam data
+        evaluation_results = []
+        successful = 0
+        failed = 0
+        
+        for roll_no, student_data in student_submissions.items():
+            logging.info(f"   Evaluating Roll No: {roll_no}...")
+            
+            # Call evaluation function with complete exam data
+            result = evaluate_student_with_exam_data(exam_data, roll_no, student_data)
+            
+            if result['status'] == 'Success':
+                evaluation_results.append(result)
+                successful += 1
+                logging.info(f"   ✅ Roll No {roll_no}: {result['total_marks_obtained']}/{result['total_marks_possible']} ({result['percentage']}%)")
+            else:
+                failed += 1
+                logging.error(f"   ❌ Roll No {roll_no}: {result.get('error')}")
+                evaluation_results.append({
+                    "status": "Failed",
+                    "roll_no": roll_no,
+                    "error": result.get('error')
+                })
+        
+        logging.info(f"✅ Batch evaluation completed: {successful} successful, {failed} failed")
+        
+        return jsonify({
+            "status": "Success",
+            "exam_id": exam_id,
+            "exam_name": exam_data.get('exam_name'),
+            "total_students": len(student_submissions),
+            "evaluated_successfully": successful,
+            "evaluation_failed": failed,
+            "results": evaluation_results
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Error in evaluate_exam_with_complete_data: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
 
