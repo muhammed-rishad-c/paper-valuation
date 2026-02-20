@@ -342,7 +342,7 @@ def segment_answers(document_annotation, debug: bool = True, config: Dict = None
     segmented_answers_unsorted = {}
    
     if not boundaries and word_data:
-        full_text = reconstruct_answer_text(word_data, 0)
+        full_text = reconstruct_answer_text_adaptive(word_data, 0, len(word_data), is_handwritten=is_handwritten)  # ✅ CORRECT!
         if full_text.strip():
             segmented_answers_unsorted['UNLABELED_CONTINUATION'] = full_text
             if debug:
