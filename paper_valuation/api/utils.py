@@ -619,17 +619,53 @@ def evaluate_student_submission(exam_id, roll_no):
 
 
 def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
+    """
+    Evaluate a student using exam data provided by Node.js
+    """
     try:
         teacher_answers = exam_data.get('teacher_answers', {})
         student_answers = student_data.get('answers', {})
         question_types = exam_data.get('question_types', {})
         question_marks = exam_data.get('question_marks', {})
         or_groups = exam_data.get('or_groups', [])
-
+        
+        logging.info(f"🎯 Evaluating Roll No: {roll_no}")
+        
         marks_breakdown = {}
         total_marks_obtained = 0.0
-        total_marks_possible = 0
-
+        
+        # ✅ FIX: Calculate total marks considering OR groups
+        # Build a set of all OR question numbers
+        or_question_numbers = set()
+        for group in or_groups:
+            if group['type'] == 'single':
+                or_question_numbers.update(str(q) for q in group['options'])
+            elif group['type'] == 'pair':
+                or_question_numbers.update(str(q) for q in group.get('option_a', []))
+                or_question_numbers.update(str(q) for q in group.get('option_b', []))
+        
+        # Calculate exam total: regular questions + one option from each OR group
+        exam_total_marks = 0
+        
+        # Add marks from regular (non-OR) questions
+        for q_num, marks in question_marks.items():
+            if str(q_num) not in or_question_numbers:
+                exam_total_marks += int(marks)
+        
+        # Add marks from OR groups (only count once per group)
+        for group in or_groups:
+            if group['type'] == 'single':
+                # For single OR: take marks from first option
+                first_option = str(group['options'][0])
+                exam_total_marks += int(question_marks.get(first_option, 0))
+            elif group['type'] == 'pair':
+                # For pair OR: take marks from first pair
+                for q in group.get('option_a', []):
+                    exam_total_marks += int(question_marks.get(str(q), 0))
+        
+        logging.info(f"   Exam total marks (considering OR groups): {exam_total_marks}")
+        
+        # Track OR groups
         or_question_map = {}
         for idx, group in enumerate(or_groups):
             if group['type'] == 'single':
@@ -638,81 +674,134 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
             elif group['type'] == 'pair':
                 for q in group.get('option_a', []) + group.get('option_b', []):
                     or_question_map[str(q)] = idx
-
+        
         or_group_scores = {}
-
+        
+        # Evaluate each question
         for q_label, student_ans in student_answers.items():
             q_num = normalize_question_key(q_label, add_prefix=False)
+            
             if q_num not in question_types:
+                logging.warning(f"   ⚠️ Question {q_label} not in answer key, skipping")
                 continue
+            
             q_type = question_types[q_num]
             max_marks = question_marks.get(q_num, 0)
             teacher_ans = teacher_answers.get(q_label, "")
+            
             if not teacher_ans:
+                logging.warning(f"   ⚠️ No teacher answer for {q_label}, skipping")
                 continue
+            
+            # Evaluate based on question type
             if q_type == "short":
-                score = evaluation_short_answer(student_answer=student_ans, teacher_answer=teacher_ans, max_mark=max_marks)
+                score = evaluation_short_answer(
+                    student_answer=student_ans,
+                    teacher_answer=teacher_ans,
+                    max_mark=max_marks
+                )
             elif q_type == "long":
                 keypoints = smart_paragraph_split(teacher_ans)
-                score = evaluation_long_answer(student_answer=student_ans, teacher_answer=keypoints, max_mark=max_marks)
+                score = evaluation_long_answer(
+                    student_answer=student_ans,
+                    teacher_answer=keypoints,
+                    max_mark=max_marks
+                )
             else:
                 continue
-
+            
+            # Handle OR groups
             if q_num in or_question_map:
                 group_idx = or_question_map[q_num]
                 if group_idx not in or_group_scores:
                     or_group_scores[group_idx] = {}
-                or_group_scores[group_idx][q_num] = {'score': score, 'max_marks': max_marks, 'q_label': q_label, 'q_type': q_type}
+                or_group_scores[group_idx][q_num] = {
+                    'score': score,
+                    'max_marks': max_marks,
+                    'q_label': q_label,
+                    'q_type': q_type
+                }
             else:
-                marks_breakdown[q_label] = {"marks_obtained": score, "max_marks": max_marks, "question_type": q_type}
+                marks_breakdown[q_label] = {
+                    "marks_obtained": score,
+                    "max_marks": max_marks,
+                    "question_type": q_type
+                }
                 total_marks_obtained += score
-                total_marks_possible += max_marks
-
+        
+        # Process OR groups
         for group_idx, group_data in or_group_scores.items():
             group = or_groups[group_idx]
+            
             if group['type'] == 'single':
-                best_q = max(group_data, key=lambda q: group_data[q]['score'])
-                q_data = group_data[best_q]
-                marks_breakdown[q_data['q_label']] = {
-                    "marks_obtained": q_data['score'], "max_marks": q_data['max_marks'],
-                    "question_type": q_data['q_type'], "or_group": True, "or_type": "single",
-                    "or_options": group['options'], "chosen_option": best_q
-                }
-                total_marks_obtained += q_data['score']
-                total_marks_possible += q_data['max_marks']
+                best_q = None
+                best_score = -1
+                
+                for q_num, data in group_data.items():
+                    if data['score'] > best_score:
+                        best_score = data['score']
+                        best_q = q_num
+                
+                if best_q:
+                    q_data = group_data[best_q]
+                    marks_breakdown[q_data['q_label']] = {
+                        "marks_obtained": q_data['score'],
+                        "max_marks": q_data['max_marks'],
+                        "question_type": q_data['q_type'],
+                        "or_group": True,
+                        "or_type": "single",
+                        "or_options": group['options'],
+                        "chosen_option": best_q
+                    }
+                    total_marks_obtained += q_data['score']
+            
             elif group['type'] == 'pair':
                 pair_a_total = sum(group_data[q]['score'] for q in group.get('option_a', []) if q in group_data)
                 pair_a_max = sum(group_data[q]['max_marks'] for q in group.get('option_a', []) if q in group_data)
                 pair_b_total = sum(group_data[q]['score'] for q in group.get('option_b', []) if q in group_data)
                 pair_b_max = sum(group_data[q]['max_marks'] for q in group.get('option_b', []) if q in group_data)
+                
                 if pair_a_total >= pair_b_total:
-                    chosen_pair, chosen_questions, chosen_total, chosen_max = 'a', group.get('option_a', []), pair_a_total, pair_a_max
+                    chosen_pair = 'a'
+                    chosen_questions = group.get('option_a', [])
+                    chosen_total = pair_a_total
                 else:
-                    chosen_pair, chosen_questions, chosen_total, chosen_max = 'b', group.get('option_b', []), pair_b_total, pair_b_max
+                    chosen_pair = 'b'
+                    chosen_questions = group.get('option_b', [])
+                    chosen_total = pair_b_total
+                
                 for q_num in chosen_questions:
-                    if q_num in group_data:
+                    if q_num in group_data: 
                         q_data = group_data[q_num]
                         marks_breakdown[q_data['q_label']] = {
-                            "marks_obtained": q_data['score'], "max_marks": q_data['max_marks'],
-                            "question_type": q_data['q_type'], "or_group": True, "or_type": "pair",
-                            "or_pair_a": group.get('option_a', []), "or_pair_b": group.get('option_b', []),
+                            "marks_obtained": q_data['score'],
+                            "max_marks": q_data['max_marks'],
+                            "question_type": q_data['q_type'],
+                            "or_group": True,
+                            "or_type": "pair",
+                            "or_pair_a": group.get('option_a', []),
+                            "or_pair_b": group.get('option_b', []),
                             "chosen_pair": chosen_pair
                         }
+                
                 total_marks_obtained += chosen_total
-                total_marks_possible += chosen_max
-
-        percentage = (total_marks_obtained / total_marks_possible * 100) if total_marks_possible > 0 else 0
-
+        
+        # Calculate percentage based on CORRECT exam total (with OR groups considered)
+        percentage = (total_marks_obtained / exam_total_marks * 100) if exam_total_marks > 0 else 0
+        
+        logging.info(f"✅ Evaluation completed: {total_marks_obtained}/{exam_total_marks} ({percentage:.2f}%)")
+        
         return {
             "status": "Success",
             "roll_no": roll_no,
             "student_name": student_data.get('student_info', {}).get('name', 'Unknown'),
             "marks_breakdown": marks_breakdown,
             "total_marks_obtained": round(total_marks_obtained, 2),
-            "total_marks_possible": total_marks_possible,
+            "total_marks_possible": exam_total_marks,  # ✅ CORRECT total
             "percentage": round(percentage, 2),
             "result": "Pass" if percentage >= 40 else "Fail"
         }
+        
     except Exception as e:
         logging.error(f"Error evaluating student: {str(e)}")
         import traceback
