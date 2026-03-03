@@ -3,18 +3,20 @@ import json
 import uuid
 import os
 import tempfile
-from flask import jsonify
+from flask import jsonify, request
 from paper_valuation.logging.logger import logging
 from paper_valuation.api.vision_segmentation import detect_and_segment_image, get_document_annotation
 from paper_valuation.components.valuation import (
     evaluation_short_answer,
-    evaluation_long_answer
+    evaluation_long_answer,
+    smart_paragraph_split
 )
-from paper_valuation.components.valuation import smart_paragraph_split
-from flask import request
-
 
 ANSWER_KEYS_FILE = 'answer_keys.json'
+
+# ============================================
+# ANSWER KEY MANAGEMENT
+# ============================================
 
 def load_answer_keys():
     if os.path.exists(ANSWER_KEYS_FILE):
@@ -22,22 +24,22 @@ def load_answer_keys():
             return json.load(f)
     return {}
 
-
 def save_answer_keys(answer_keys):
     with open(ANSWER_KEYS_FILE, 'w') as f:
         json.dump(answer_keys, f, indent=2)
 
-
 def get_answer_key_by_id(exam_id):
     all_keys = load_answer_keys()
     return all_keys.get(exam_id, None)
-
 
 def generate_exam_id(exam_name, class_name, subject):
     base = f"{subject}_{class_name}_{exam_name.replace(' ', '_')}"
     unique_suffix = str(uuid.uuid4())[:8].upper()
     return f"{base}_{unique_suffix}"
 
+# ============================================
+# PARSING UTILITIES
+# ============================================
 
 def parse_question_range(range_str):
     questions = []
@@ -51,18 +53,51 @@ def parse_question_range(range_str):
             questions.append(int(part))
     return questions
 
+def parse_marks_string(marks_str, question_count):
+    if not marks_str or not marks_str.strip():
+        raise ValueError("Marks string cannot be empty")
+    
+    marks_str = marks_str.strip()
+    
+    if ',' not in marks_str:
+        try:
+            mark = int(marks_str)
+            if mark <= 0:
+                raise ValueError("Marks must be positive numbers")
+            return [mark] * question_count
+        except ValueError:
+            raise ValueError(f"Invalid marks format: '{marks_str}'.")
+    
+    marks_parts = [part.strip() for part in marks_str.split(',')]
+    
+    try:
+        marks_list = [int(mark) for mark in marks_parts]
+    except ValueError:
+        raise ValueError(f"Invalid marks format: '{marks_str}'. All values must be numbers.")
+    
+    if any(mark <= 0 for mark in marks_list):
+        raise ValueError("All marks must be positive numbers")
+    
+    if len(marks_list) != question_count:
+        raise ValueError(
+            f"Marks count mismatch: provided {len(marks_list)} marks but have {question_count} questions."
+        )
+    
+    return marks_list
+
+def normalize_question_key(key, add_prefix=True):
+    if isinstance(key, int):
+        num = str(key)
+    else:
+        match = re.search(r'\d+', str(key))
+        num = match.group() if match else "0"
+    return f"Q{num}" if add_prefix else num
+
+# ============================================
+# MULTI-PAGE MERGING
+# ============================================
 
 def merge_multi_page_result(all_pages_list):
-    """
-    Merge OCR results from multiple pages into a single answers dict.
-
-    Rules:
-    1. Same Q label appears on a later page → append that page's text to the
-       existing answer (student continued Q2 on page 2 by writing Q2 again).
-    2. UNLABELED_CONTINUATION → append to the last seen Q label.
-       Students should always re-label, but we handle unlabeled pages gracefully.
-    3. New Q label not seen before → add as new answer.
-    """
     merged_answers = {}
     last_q_label = None
 
@@ -75,41 +110,29 @@ def merge_multi_page_result(all_pages_list):
                 continue
 
             if q_label == 'UNLABELED_CONTINUATION':
-                # No label written — append to last known question
                 if last_q_label and last_q_label in merged_answers:
                     merged_answers[last_q_label] += ' ' + text
-                    logging.warning(
-                        f"Page {page_index + 1}: unlabeled continuation appended to {last_q_label}. "
-                        f"Student should re-write the Q label on continuation pages."
-                    )
                 else:
                     merged_answers.setdefault('Q1', '')
                     merged_answers['Q1'] += (' ' if merged_answers['Q1'] else '') + text
                     last_q_label = 'Q1'
-                    logging.warning(
-                        f"Page {page_index + 1}: unlabeled page with no prior question — stored as Q1"
-                    )
             elif q_label in merged_answers:
-                # Same Q label seen on a new page → continuation, concatenate
                 merged_answers[q_label] += ' ' + text
                 last_q_label = q_label
-                logging.info(f"Page {page_index + 1}: {q_label} continuation — concatenated")
             else:
-                # New question
                 merged_answers[q_label] = text
                 last_q_label = q_label
 
-    # Sort by question number
     sorted_answers = dict(sorted(
         merged_answers.items(),
         key=lambda x: int(re.search(r'\d+', x[0]).group()) if re.search(r'\d+', x[0]) else 0
     ))
 
-    logging.info(
-        f"Merge complete: {len(sorted_answers)} questions across {len(all_pages_list)} pages"
-    )
     return {"answers": sorted_answers, "total_pages": len(all_pages_list)}
 
+# ============================================
+# INDIVIDUAL EVALUATION
+# ============================================
 
 def evaluate_paper_individual(files, config=None):
     try:
@@ -125,13 +148,11 @@ def evaluate_paper_individual(files, config=None):
                 file.save(tmp.name)
                 temp_path = tmp.name
 
-            logging.info(f"Processing Page {index + 1}: {file.filename} -> {temp_path}")
             page_result = detect_and_segment_image(temp_path, debug=True, config=config)
             all_page_result.append(page_result)
 
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-                logging.info(f"Cleaned up Page {index + 1} temp file.")
 
         final_valuation = merge_multi_page_result(all_page_result)
 
@@ -144,11 +165,16 @@ def evaluate_paper_individual(files, config=None):
         logging.error(e)
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
+# ============================================
+# IDENTITY EXTRACTION
+# ============================================
 
 def clean_student_data(raw_value, field_type):
     if not raw_value or raw_value == "Unknown":
         return "Unknown"
+    
     clean_val = raw_value.strip().upper()
+    
     if field_type == "roll_no":
         replacements = {'O': '0', 'D': '0', 'Q': '0', 'I': '1', 'L': '1',
                         'S': '5', 'G': '6', 'B': '8', 'Z': '2'}
@@ -156,6 +182,7 @@ def clean_student_data(raw_value, field_type):
             clean_val = clean_val.replace(char, digit)
         digits = re.findall(r'\d+', clean_val)
         return "".join(digits) if digits else "Unknown"
+    
     if field_type == "class":
         digits_match = re.search(r'\d+', clean_val)
         if digits_match:
@@ -164,29 +191,36 @@ def clean_student_data(raw_value, field_type):
                 return "S" + num[1:]
             return "S" + num
         return clean_val
+    
     if field_type == "subject":
         if "ALORS" in clean_val or clean_val == "AL":
             return "AI"
         return clean_val
+    
     return clean_val
-
 
 def extract_series_identity(document_annotation):
     full_text = document_annotation.text
     details = {"name": "Unknown", "class": "Unknown", "subject": "Unknown", "roll_no": "Unknown"}
+    
     patterns = {
         "name": r"Name\s*[:\-]\s*([A-Za-z\s\.]+)",
         "class": r"Class\s*[:\-]\s*([A-Za-z0-9\s]+)",
         "subject": r"Subject\s*[:\-]\s*([A-Za-z0-9\s]+)",
         "roll_no": r"Roll\s*(?:No|#)?\s*[:\-]\s*([A-Z0-9]+)"
     }
+    
     for key, pattern in patterns.items():
         match = re.search(pattern, full_text, re.IGNORECASE)
         if match:
             raw_val = match.group(1).strip().split('\n')[0]
             details[key] = clean_student_data(raw_val, key)
+    
     return details
 
+# ============================================
+# BATCH EVALUATION
+# ============================================
 
 def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class, manual_subject, exam_id=None):
     try:
@@ -194,7 +228,6 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
             student_id.save(tmp.name)
             id_temp_path = tmp.name
 
-        logging.info(f"Extracting identity from: {student_id.filename}")
         id_annotation = get_document_annotation(id_temp_path)
         student_info = extract_series_identity(id_annotation)
 
@@ -214,28 +247,19 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
                 exam_data = json.loads(exam_data_str)
                 question_types = exam_data.get('question_types', {})
                 config['question_types'] = question_types
-                exam_name = exam_data.get('exam_name', 'Unknown')
                 exam_id = exam_data.get('exam_id', exam_id)
-                logging.info(f"✅ Received exam data from Node.js: {exam_name}")
             except Exception as e:
-                logging.error(f"❌ Failed to parse exam_data from Node.js: {str(e)}")
+                logging.error(f"Failed to parse exam_data: {str(e)}")
                 exam_data = None
                 exam_id = None
         else:
             if exam_id:
-                logging.warning(f"⚠️ No exam_data received from Node.js, trying old JSON lookup...")
                 answer_key = get_answer_key_by_id(exam_id)
                 if answer_key:
                     question_types = answer_key.get('question_types', {})
                     config['question_types'] = question_types
-                    exam_name = answer_key.get('exam_metadata', {}).get('exam_name', answer_key.get('exam_name', 'Unknown'))
-                    logging.info(f"✅ Loaded answer key from JSON: {exam_name}")
                 else:
-                    logging.warning(f"⚠️ Exam ID {exam_id} not found in JSON.")
                     exam_id = None
-            else:
-                logging.info("ℹ️ No exam_id or exam_data provided")
-                exam_id = None
 
         all_pages_result = []
         for index, file in enumerate(answer_files):
@@ -243,7 +267,6 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
                 file.save(tmp.name)
                 temp_path = tmp.name
 
-            logging.info(f"Processing Answer Page {index + 1} for {student_info['name']}")
             page_result = detect_and_segment_image(temp_path, debug=True, config=config)
             all_pages_result.append(page_result)
 
@@ -252,68 +275,47 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
 
         final_valuation = merge_multi_page_result(all_pages_result)
 
-        if exam_id and student_info['roll_no'] != 'Unknown':
-            try:
-                logging.info(f"ℹ️ Student {student_info.get('roll_no', 'Unknown')} - Node.js will save to PostgreSQL")
-            except Exception as save_error:
-                logging.error(f"⚠️ Failed to save student submission: {str(save_error)}")
-
         return jsonify({
             "status": "Success",
             "student_info": student_info,
             "recognition_result": final_valuation,
             "saved_to_exam": exam_id if exam_id else None
         }), 200
+        
     except Exception as e:
         logging.error(e)
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
+# ============================================
+# ANSWER KEY EXTRACTION
+# ============================================
 
 def extract_answer_key_text_util(answer_key_image, answer_type):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
             answer_key_image.save(tmp.name)
             temp_path = tmp.name
+        
         config = {
             'default_answer_type': answer_type,
             'strict_validation': False,
             'is_handwritten': False
         }
+        
         result = detect_and_segment_image(temp_path, debug=True, config=config)
+        
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        logging.info(f"✅ Successfully extracted {len(result['answers'])} answers as '{answer_type}' type (PRINTED)")
-        return {"status": "Success", "answers": result['answers'], "metadata": result.get('metadata', {})}
+        
+        return {
+            "status": "Success",
+            "answers": result['answers'],
+            "metadata": result.get('metadata', {})
+        }
+        
     except Exception as e:
-        logging.error(f"Error in extract_answer_key_text_util: {str(e)}")
+        logging.error(f"Extract answer key error: {str(e)}")
         raise
-
-
-def parse_marks_string(marks_str, question_count):
-    if not marks_str or not marks_str.strip():
-        raise ValueError("Marks string cannot be empty")
-    marks_str = marks_str.strip()
-    if ',' not in marks_str:
-        try:
-            mark = int(marks_str)
-            if mark <= 0:
-                raise ValueError("Marks must be positive numbers")
-            return [mark] * question_count
-        except ValueError:
-            raise ValueError(f"Invalid marks format: '{marks_str}'.")
-    marks_parts = [part.strip() for part in marks_str.split(',')]
-    try:
-        marks_list = [int(mark) for mark in marks_parts]
-    except ValueError:
-        raise ValueError(f"Invalid marks format: '{marks_str}'. All values must be numbers.")
-    if any(mark <= 0 for mark in marks_list):
-        raise ValueError("All marks must be positive numbers")
-    if len(marks_list) != question_count:
-        raise ValueError(
-            f"Marks count mismatch: provided {len(marks_list)} marks but have {question_count} questions."
-        )
-    return marks_list
-
 
 def save_answer_key_util(data):
     try:
@@ -331,7 +333,6 @@ def save_answer_key_util(data):
         if not all([exam_name, class_name, subject]):
             return {"status": "Failed", "error": "Missing required fields: exam_name, class_name, or subject"}
 
-        logging.info(f"💾 Saving answer key for: {exam_name} ({class_name} - {subject})")
         exam_id = generate_exam_id(exam_name, class_name, subject)
 
         short_questions = parse_question_range(short_questions_str) if short_questions_str else []
@@ -355,7 +356,6 @@ def save_answer_key_util(data):
                 for q_num, mark in zip(short_questions, short_marks_list):
                     question_marks[str(q_num)] = mark
                     total_marks += mark
-                logging.info(f"   ✅ Short questions: {len(short_questions)} questions, marks: {short_marks_list}")
             except ValueError as e:
                 return {"status": "Failed", "error": f"Short question marks error: {str(e)}"}
         elif short_questions and not short_marks_str:
@@ -367,7 +367,6 @@ def save_answer_key_util(data):
                 for q_num, mark in zip(long_questions, long_marks_list):
                     question_marks[str(q_num)] = mark
                     total_marks += mark
-                logging.info(f"   ✅ Long questions: {len(long_questions)} questions, marks: {long_marks_list}")
             except ValueError as e:
                 return {"status": "Failed", "error": f"Long question marks error: {str(e)}"}
         elif long_questions and not long_marks_str:
@@ -378,20 +377,17 @@ def save_answer_key_util(data):
 
         processed_or_groups = []
         if or_groups:
-            logging.info(f"   ⚡ Processing {len(or_groups)} OR groups...")
             for group in or_groups:
                 group_type = group.get('type')
                 if group_type == 'single':
                     options = group.get('options', [])
                     if len(options) == 2:
                         processed_or_groups.append({'type': 'single', 'options': options})
-                        logging.info(f"      • Single OR: Q{options[0]} OR Q{options[1]}")
                 elif group_type == 'pair':
                     option_a = group.get('option_a', [])
                     option_b = group.get('option_b', [])
                     if option_a and option_b:
                         processed_or_groups.append({'type': 'pair', 'option_a': option_a, 'option_b': option_b})
-                        logging.info(f"      • Pair OR: Q{','.join(str(o) for o in option_a)} OR Q{','.join(str(o) for o in option_b)}")
 
         exam_data = {
             'exam_metadata': {
@@ -413,12 +409,6 @@ def save_answer_key_util(data):
         all_exam_data[exam_id] = exam_data
         save_answer_keys(all_exam_data)
 
-        logging.info(f"✅ Answer key saved: {exam_id}")
-        logging.info(f"   📊 {len(short_questions)} short + {len(long_questions)} long = {len(question_types)} total questions")
-        logging.info(f"   💯 Total marks: {total_marks}")
-        if processed_or_groups:
-            logging.info(f"   ⚡ OR groups: {len(processed_or_groups)}")
-        logging.info(f"   👥 Student submissions structure created (empty)")
         return {
             "status": "Success",
             "exam_id": exam_id,
@@ -427,19 +417,25 @@ def save_answer_key_util(data):
             "total_marks": total_marks,
             "or_groups_count": len(processed_or_groups)
         }
+        
     except Exception as e:
-        logging.error(f"Error in save_answer_key_util: {str(e)}")
+        logging.error(f"Save answer key error: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
         raise
 
+# ============================================
+# STUDENT SUBMISSION MANAGEMENT
+# ============================================
 
 def save_student_submission(exam_id, roll_no, student_info, answers):
     try:
         all_exam_data = load_answer_keys()
         if exam_id not in all_exam_data:
             return {"status": "Failed", "error": f"Exam {exam_id} does not exist"}
+        
         exam_data = all_exam_data[exam_id]
+        
         import datetime
         submission = {
             'student_info': student_info,
@@ -450,21 +446,23 @@ def save_student_submission(exam_id, roll_no, student_info, answers):
             'total_marks_obtained': None,
             'percentage': None
         }
+        
         exam_data['student_submissions'][roll_no] = submission
         all_exam_data[exam_id] = exam_data
         save_answer_keys(all_exam_data)
-        logging.info(f"✅ Saved submission for Roll No: {roll_no} to Exam: {exam_id}")
+        
         return {"status": "Success", "message": "Student submission saved"}
+        
     except Exception as e:
-        logging.error(f"Error saving student submission: {str(e)}")
+        logging.error(f"Save submission error: {str(e)}")
         raise
-
 
 def get_exam_with_submissions(exam_id):
     try:
         all_exam_data = load_answer_keys()
         if exam_id not in all_exam_data:
             return None
+        
         exam_data = all_exam_data[exam_id]
         return {
             'exam_metadata': exam_data.get('exam_metadata', {}),
@@ -474,26 +472,21 @@ def get_exam_with_submissions(exam_id):
             'student_submissions': exam_data.get('student_submissions', {}),
             'total_students': len(exam_data.get('student_submissions', {}))
         }
+        
     except Exception as e:
-        logging.error(f"Error retrieving exam data: {str(e)}")
+        logging.error(f"Get exam error: {str(e)}")
         raise
 
-
-def normalize_question_key(key, add_prefix=True):
-    import re
-    if isinstance(key, int):
-        num = str(key)
-    else:
-        match = re.search(r'\d+', str(key))
-        num = match.group() if match else "0"
-    return f"Q{num}" if add_prefix else num
-
+# ============================================
+# EVALUATION FUNCTIONS
+# ============================================
 
 def evaluate_student_submission(exam_id, roll_no):
     try:
         all_exam_data = load_answer_keys()
         if exam_id not in all_exam_data:
             return {"status": "Failed", "error": f"Exam {exam_id} not found"}
+        
         exam_data = all_exam_data[exam_id]
         if roll_no not in exam_data.get('student_submissions', {}):
             return {"status": "Failed", "error": f"Student {roll_no} submission not found"}
@@ -504,11 +497,6 @@ def evaluate_student_submission(exam_id, roll_no):
         question_types = exam_data.get('question_types', {})
         question_marks = exam_data.get('question_marks', {})
         or_groups = exam_data.get('or_groups', [])
-
-        logging.info(f"🎯 Starting evaluation for Roll No: {roll_no}, Exam: {exam_id}")
-        logging.info(f"   Questions to evaluate: {len(student_answers)}")
-        if or_groups:
-            logging.info(f"   ⚡ OR groups detected: {len(or_groups)}")
 
         marks_breakdown = {}
         total_marks_obtained = 0.0
@@ -527,22 +515,30 @@ def evaluate_student_submission(exam_id, roll_no):
 
         for q_label, student_ans in student_answers.items():
             q_num = normalize_question_key(q_label, add_prefix=False)
+            
             if q_num not in question_types:
-                logging.warning(f"   ⚠️ Question {q_label} not in answer key, skipping")
                 continue
+            
             q_type = question_types[q_num]
             max_marks = question_marks[q_num]
             teacher_ans = teacher_answers.get(q_label, "")
+            
             if not teacher_ans:
-                logging.warning(f"   ⚠️ No teacher answer for {q_label}, skipping")
                 continue
+            
             if q_type == "short":
-                score = evaluation_short_answer(student_answer=student_ans, teacher_answer=teacher_ans, max_mark=max_marks)
-                logging.info(f"   ✅ {q_label} (Short): {score}/{max_marks}")
+                score = evaluation_short_answer(
+                    student_answer=student_ans,
+                    teacher_answer=teacher_ans,
+                    max_mark=max_marks
+                )
             elif q_type == "long":
                 keypoints = smart_paragraph_split(teacher_ans)
-                score = evaluation_long_answer(student_answer=student_ans, teacher_answer=keypoints, max_mark=max_marks)
-                logging.info(f"   ✅ {q_label} (Long): {score}/{max_marks}")
+                score = evaluation_long_answer(
+                    student_answer=student_ans,
+                    teacher_answer=keypoints,
+                    max_mark=max_marks
+                )
             else:
                 continue
 
@@ -550,49 +546,68 @@ def evaluate_student_submission(exam_id, roll_no):
                 group_idx = or_question_map[q_num]
                 if group_idx not in or_group_scores:
                     or_group_scores[group_idx] = {}
-                or_group_scores[group_idx][q_num] = {'score': score, 'max_marks': max_marks, 'q_label': q_label, 'q_type': q_type}
-                logging.info(f"      ⚡ Part of OR group #{group_idx + 1}")
+                or_group_scores[group_idx][q_num] = {
+                    'score': score,
+                    'max_marks': max_marks,
+                    'q_label': q_label,
+                    'q_type': q_type
+                }
             else:
-                marks_breakdown[q_label] = {"marks_obtained": score, "max_marks": max_marks, "question_type": q_type}
+                marks_breakdown[q_label] = {
+                    "marks_obtained": score,
+                    "max_marks": max_marks,
+                    "question_type": q_type
+                }
                 total_marks_obtained += score
                 total_marks_possible += max_marks
 
         for group_idx, group_data in or_group_scores.items():
             group = or_groups[group_idx]
+            
             if group['type'] == 'single':
                 best_q = max(group_data, key=lambda q: group_data[q]['score'])
                 q_data = group_data[best_q]
                 marks_breakdown[q_data['q_label']] = {
-                    "marks_obtained": q_data['score'], "max_marks": q_data['max_marks'],
-                    "question_type": q_data['q_type'], "or_group": True, "or_type": "single",
-                    "or_options": group['options'], "chosen_option": best_q
+                    "marks_obtained": q_data['score'],
+                    "max_marks": q_data['max_marks'],
+                    "question_type": q_data['q_type'],
+                    "or_group": True,
+                    "or_type": "single",
+                    "or_options": group['options'],
+                    "chosen_option": best_q
                 }
                 total_marks_obtained += q_data['score']
                 total_marks_possible += q_data['max_marks']
-                logging.info(f"   ⚡ OR Group (Single): Chose Q{best_q} with {q_data['score']}/{q_data['max_marks']}")
+            
             elif group['type'] == 'pair':
                 pair_a_total = sum(group_data[q]['score'] for q in group['option_a'] if q in group_data)
                 pair_a_max = sum(group_data[q]['max_marks'] for q in group['option_a'] if q in group_data)
                 pair_b_total = sum(group_data[q]['score'] for q in group['option_b'] if q in group_data)
                 pair_b_max = sum(group_data[q]['max_marks'] for q in group['option_b'] if q in group_data)
+                
                 if pair_a_total >= pair_b_total:
                     chosen_pair, chosen_questions, chosen_total, chosen_max = 'a', group['option_a'], pair_a_total, pair_a_max
                 else:
                     chosen_pair, chosen_questions, chosen_total, chosen_max = 'b', group['option_b'], pair_b_total, pair_b_max
+                
                 for q_num in chosen_questions:
                     if q_num in group_data:
                         q_data = group_data[q_num]
                         marks_breakdown[q_data['q_label']] = {
-                            "marks_obtained": q_data['score'], "max_marks": q_data['max_marks'],
-                            "question_type": q_data['q_type'], "or_group": True, "or_type": "pair",
-                            "or_pair_a": group['option_a'], "or_pair_b": group['option_b'], "chosen_pair": chosen_pair
+                            "marks_obtained": q_data['score'],
+                            "max_marks": q_data['max_marks'],
+                            "question_type": q_data['q_type'],
+                            "or_group": True,
+                            "or_type": "pair",
+                            "or_pair_a": group['option_a'],
+                            "or_pair_b": group['option_b'],
+                            "chosen_pair": chosen_pair
                         }
+                
                 total_marks_obtained += chosen_total
                 total_marks_possible += chosen_max
-                logging.info(f"   ⚡ OR Group (Pair): Chose Pair {chosen_pair.upper()} with {chosen_total}/{chosen_max}")
 
         percentage = (total_marks_obtained / total_marks_possible * 100) if total_marks_possible > 0 else 0
-        logging.info(f"✅ Evaluation completed: {total_marks_obtained}/{total_marks_possible} ({percentage:.2f}%)")
 
         exam_data['student_submissions'][roll_no]['marks_awarded'] = marks_breakdown
         exam_data['student_submissions'][roll_no]['total_marks_obtained'] = round(total_marks_obtained, 2)
@@ -611,17 +626,14 @@ def evaluate_student_submission(exam_id, roll_no):
             "percentage": round(percentage, 2),
             "result": "Pass" if percentage >= 40 else "Fail"
         }
+        
     except Exception as e:
-        logging.error(f"Error evaluating student submission: {str(e)}")
+        logging.error(f"Evaluate submission error: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
         return {"status": "Failed", "error": str(e)}
 
-
 def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
-    """
-    Evaluate a student using exam data provided by Node.js
-    """
     try:
         teacher_answers = exam_data.get('teacher_answers', {})
         student_answers = student_data.get('answers', {})
@@ -629,13 +641,10 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
         question_marks = exam_data.get('question_marks', {})
         or_groups = exam_data.get('or_groups', [])
         
-        logging.info(f"🎯 Evaluating Roll No: {roll_no}")
-        
         marks_breakdown = {}
         total_marks_obtained = 0.0
         
-        # ✅ FIX: Calculate total marks considering OR groups
-        # Build a set of all OR question numbers
+        # Calculate exam total considering OR groups
         or_question_numbers = set()
         for group in or_groups:
             if group['type'] == 'single':
@@ -644,28 +653,20 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
                 or_question_numbers.update(str(q) for q in group.get('option_a', []))
                 or_question_numbers.update(str(q) for q in group.get('option_b', []))
         
-        # Calculate exam total: regular questions + one option from each OR group
         exam_total_marks = 0
         
-        # Add marks from regular (non-OR) questions
         for q_num, marks in question_marks.items():
             if str(q_num) not in or_question_numbers:
                 exam_total_marks += int(marks)
         
-        # Add marks from OR groups (only count once per group)
         for group in or_groups:
             if group['type'] == 'single':
-                # For single OR: take marks from first option
                 first_option = str(group['options'][0])
                 exam_total_marks += int(question_marks.get(first_option, 0))
             elif group['type'] == 'pair':
-                # For pair OR: take marks from first pair
                 for q in group.get('option_a', []):
                     exam_total_marks += int(question_marks.get(str(q), 0))
         
-        logging.info(f"   Exam total marks (considering OR groups): {exam_total_marks}")
-        
-        # Track OR groups
         or_question_map = {}
         for idx, group in enumerate(or_groups):
             if group['type'] == 'single':
@@ -677,12 +678,10 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
         
         or_group_scores = {}
         
-        # Evaluate each question
         for q_label, student_ans in student_answers.items():
             q_num = normalize_question_key(q_label, add_prefix=False)
             
             if q_num not in question_types:
-                logging.warning(f"   ⚠️ Question {q_label} not in answer key, skipping")
                 continue
             
             q_type = question_types[q_num]
@@ -690,10 +689,8 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
             teacher_ans = teacher_answers.get(q_label, "")
             
             if not teacher_ans:
-                logging.warning(f"   ⚠️ No teacher answer for {q_label}, skipping")
                 continue
             
-            # Evaluate based on question type
             if q_type == "short":
                 score = evaluation_short_answer(
                     student_answer=student_ans,
@@ -710,7 +707,6 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
             else:
                 continue
             
-            # Handle OR groups
             if q_num in or_question_map:
                 group_idx = or_question_map[q_num]
                 if group_idx not in or_group_scores:
@@ -729,37 +725,26 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
                 }
                 total_marks_obtained += score
         
-        # Process OR groups
         for group_idx, group_data in or_group_scores.items():
             group = or_groups[group_idx]
             
             if group['type'] == 'single':
-                best_q = None
-                best_score = -1
-                
-                for q_num, data in group_data.items():
-                    if data['score'] > best_score:
-                        best_score = data['score']
-                        best_q = q_num
-                
-                if best_q:
-                    q_data = group_data[best_q]
-                    marks_breakdown[q_data['q_label']] = {
-                        "marks_obtained": q_data['score'],
-                        "max_marks": q_data['max_marks'],
-                        "question_type": q_data['q_type'],
-                        "or_group": True,
-                        "or_type": "single",
-                        "or_options": group['options'],
-                        "chosen_option": best_q
-                    }
-                    total_marks_obtained += q_data['score']
+                best_q = max(group_data.items(), key=lambda x: x[1]['score'])[0]
+                q_data = group_data[best_q]
+                marks_breakdown[q_data['q_label']] = {
+                    "marks_obtained": q_data['score'],
+                    "max_marks": q_data['max_marks'],
+                    "question_type": q_data['q_type'],
+                    "or_group": True,
+                    "or_type": "single",
+                    "or_options": group['options'],
+                    "chosen_option": best_q
+                }
+                total_marks_obtained += q_data['score']
             
             elif group['type'] == 'pair':
                 pair_a_total = sum(group_data[q]['score'] for q in group.get('option_a', []) if q in group_data)
-                pair_a_max = sum(group_data[q]['max_marks'] for q in group.get('option_a', []) if q in group_data)
                 pair_b_total = sum(group_data[q]['score'] for q in group.get('option_b', []) if q in group_data)
-                pair_b_max = sum(group_data[q]['max_marks'] for q in group.get('option_b', []) if q in group_data)
                 
                 if pair_a_total >= pair_b_total:
                     chosen_pair = 'a'
@@ -771,7 +756,7 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
                     chosen_total = pair_b_total
                 
                 for q_num in chosen_questions:
-                    if q_num in group_data: 
+                    if q_num in group_data:
                         q_data = group_data[q_num]
                         marks_breakdown[q_data['q_label']] = {
                             "marks_obtained": q_data['score'],
@@ -786,10 +771,7 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
                 
                 total_marks_obtained += chosen_total
         
-        # Calculate percentage based on CORRECT exam total (with OR groups considered)
         percentage = (total_marks_obtained / exam_total_marks * 100) if exam_total_marks > 0 else 0
-        
-        logging.info(f"✅ Evaluation completed: {total_marks_obtained}/{exam_total_marks} ({percentage:.2f}%)")
         
         return {
             "status": "Success",
@@ -797,13 +779,13 @@ def evaluate_student_with_exam_data(exam_data, roll_no, student_data):
             "student_name": student_data.get('student_info', {}).get('name', 'Unknown'),
             "marks_breakdown": marks_breakdown,
             "total_marks_obtained": round(total_marks_obtained, 2),
-            "total_marks_possible": exam_total_marks,  # ✅ CORRECT total
+            "total_marks_possible": exam_total_marks,
             "percentage": round(percentage, 2),
             "result": "Pass" if percentage >= 40 else "Fail"
         }
         
     except Exception as e:
-        logging.error(f"Error evaluating student: {str(e)}")
+        logging.error(f"Evaluate student error: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
         return {"status": "Failed", "error": str(e)}
