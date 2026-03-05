@@ -199,22 +199,86 @@ def clean_student_data(raw_value, field_type):
     
     return clean_val
 
-def extract_series_identity(document_annotation):
-    full_text = document_annotation.text
-    details = {"name": "Unknown", "class": "Unknown", "subject": "Unknown", "roll_no": "Unknown"}
+def extract_facing_sheet_identity(document_annotation):
+    """
+    Extract student details from the structured facing sheet.
     
-    patterns = {
-        "name": r"Name\s*[:\-]\s*([A-Za-z\s\.]+)",
-        "class": r"Class\s*[:\-]\s*([A-Za-z0-9\s]+)",
-        "subject": r"Subject\s*[:\-]\s*([A-Za-z0-9\s]+)",
-        "roll_no": r"Roll\s*(?:No|#)?\s*[:\-]\s*([A-Z0-9]+)"
+    The facing sheet has labeled fields:
+    - NAME:
+    - ROLL NUMBER:
+    - DATE:
+    - BATCH:
+    - SUBJECT:
+    """
+    full_text = document_annotation.text
+    
+    
+    details = {
+        "name": "Unknown",
+        "roll_no": "Unknown",
+        "class": "Unknown",
+        "batch": "Unknown",
+        "subject": "Unknown",
+        "date": "Unknown"
     }
     
-    for key, pattern in patterns.items():
-        match = re.search(pattern, full_text, re.IGNORECASE)
-        if match:
-            raw_val = match.group(1).strip().split('\n')[0]
-            details[key] = clean_student_data(raw_val, key)
+    
+    patterns = {
+        "name": [
+            r"NAME\s*[:\-]?\s*([A-Za-z\s\.]+?)(?:\n|ROLL|$)",
+            r"NAME\s*[:\-]?\s*([A-Za-z\s\.]{3,40})"
+        ],
+        "roll_no": [
+            r"ROLL\s*NUMBER\s*[:\-]?\s*([A-Z0-9]+)",
+            r"ROLL\s*NO\s*[:\-]?\s*([A-Z0-9]+)",
+            r"ROLL\s*[:\-]?\s*([A-Z0-9]+)"
+        ],
+        "date": [
+            r"DATE\s*[:\-]?\s*([0-9\/\-\.]+)",
+        ],
+        "batch": [
+            r"BATCH\s*[:\-]?\s*([A-Z0-9\s]+?)(?:\n|SUBJECT|$)",
+            r"BATCH\s*[:\-]?\s*([A-Z0-9\s]{1,20})"
+        ],
+        "subject": [
+            r"SUBJECT\s*[:\-]?\s*([A-Za-z\s]+?)(?:\n|$)",
+            r"SUBJECT\s*[:\-]?\s*([A-Za-z\s]{2,30})"
+        ]
+    }
+    
+    
+    for field, pattern_list in patterns.items():
+        for pattern in pattern_list:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                raw_value = match.group(1).strip()
+                
+
+                if field == "roll_no":
+                    details[field] = clean_student_data(raw_value, "roll_no")
+                elif field == "subject":
+                    details[field] = clean_student_data(raw_value, "subject")
+                elif field == "name":
+
+                    cleaned_name = raw_value.split('\n')[0].strip()
+                    details[field] = cleaned_name if len(cleaned_name) > 2 else "Unknown"
+                elif field == "batch":
+                    details[field] = raw_value.upper().strip()
+     
+                    if details["class"] == "Unknown":
+                        class_match = re.search(r'S?(\d)', raw_value)
+                        if class_match:
+                            details["class"] = f"S{class_match.group(1)}"
+                elif field == "date":
+                    details[field] = raw_value.strip()
+                
+                break  
+    
+   
+    if details["class"] == "Unknown" and details["batch"] != "Unknown":
+        class_match = re.search(r'S?(\d)', details["batch"])
+        if class_match:
+            details["class"] = f"S{class_match.group(1)}"
     
     return details
 
@@ -223,24 +287,34 @@ def extract_series_identity(document_annotation):
 # ============================================
 
 def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class, manual_subject, exam_id=None):
+
     try:
+
         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
             student_id.save(tmp.name)
             id_temp_path = tmp.name
 
         id_annotation = get_document_annotation(id_temp_path)
-        student_info = extract_series_identity(id_annotation)
+        
+        
+        student_info = extract_facing_sheet_identity(id_annotation)
 
+        
         if manual_roll_no and manual_roll_no != 'N/A':
             student_info["roll_no"] = manual_roll_no
-        student_info['class'] = manual_class
-        student_info['subject'] = manual_subject
+        if manual_class and manual_class != 'N/A':
+            student_info["class"] = manual_class
+        if manual_subject and manual_subject != 'N/A':
+            student_info["subject"] = manual_subject
 
+        
         if os.path.exists(id_temp_path):
             os.remove(id_temp_path)
 
+
         config = {'is_handwritten': True}
 
+        
         exam_data_str = request.form.get('exam_data')
         if exam_data_str:
             try:
@@ -248,32 +322,42 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
                 question_types = exam_data.get('question_types', {})
                 config['question_types'] = question_types
                 exam_id = exam_data.get('exam_id', exam_id)
+                logging.info(f"Loaded exam data from Node.js: {exam_data.get('exam_name', 'Unknown')}")
             except Exception as e:
                 logging.error(f"Failed to parse exam_data: {str(e)}")
                 exam_data = None
                 exam_id = None
         else:
+            
             if exam_id:
                 answer_key = get_answer_key_by_id(exam_id)
                 if answer_key:
                     question_types = answer_key.get('question_types', {})
                     config['question_types'] = question_types
+                    logging.info(f"Loaded answer key from JSON: {answer_key.get('exam_name', 'Unknown')}")
                 else:
+                    logging.warning(f"Exam ID {exam_id} not found")
                     exam_id = None
 
+
         all_pages_result = []
+        
         for index, file in enumerate(answer_files):
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                 file.save(tmp.name)
                 temp_path = tmp.name
 
+            
             page_result = detect_and_segment_image(temp_path, debug=True, config=config)
             all_pages_result.append(page_result)
 
+            
             if os.path.exists(temp_path):
                 os.remove(temp_path)
 
+
         final_valuation = merge_multi_page_result(all_pages_result)
+
 
         return jsonify({
             "status": "Success",
@@ -283,7 +367,9 @@ def evaluate_series_paper(student_id, answer_files, manual_roll_no, manual_class
         }), 200
         
     except Exception as e:
-        logging.error(e)
+        logging.error(f"Error in evaluate_series_paper: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
         return jsonify({"status": "Failed", "error": str(e)}), 500
 
 # ============================================
