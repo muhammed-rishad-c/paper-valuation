@@ -3,6 +3,7 @@ import sys
 import traceback
 import json
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 from paper_valuation.logging.logger import logging
 from paper_valuation.api.utils import (
@@ -22,6 +23,8 @@ from paper_valuation.api.utils import (
 from paper_valuation.components.valuation import smart_paragraph_split
 
 app = Flask(__name__)
+
+CORS(app)
 
 # ============================================
 # INDIVIDUAL EVALUATION
@@ -635,6 +638,130 @@ def evaluate_exam_with_complete_data():
     except Exception as e:
         logging.error(f"Evaluate exam with data error: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"status": "Failed", "error": str(e)}), 500
+    
+    
+@app.route('/api/generate_barcode_facing_sheets', methods=['POST'])
+def generate_barcode_facing_sheets():
+    """Generate PDF with barcode facing sheets"""
+    try:
+        from paper_valuation.api.pdf_generator import generate_facing_sheet_pdf
+        
+        data = request.json
+        batch_id = data.get('batch_id')
+        mappings = data.get('mappings', [])
+        exam_details = data.get('exam_details', {})
+        
+        print(f"\n{'='*60}")
+        print(f"📋 Generating facing sheets for batch {batch_id}")
+        print(f"   Students: {len(mappings)}")
+        print(f"{'='*60}\n")
+        
+        if not mappings:
+            return jsonify({
+                'status': 'error',
+                'message': 'No student mappings provided'
+            }), 400
+        
+        # ✅ SAVE TO NODE.JS PROJECT FOLDER (ABSOLUTE PATH)
+        nodejs_project_folder = r'E:\full stack\projects\paper-valuation'
+        output_dir = os.path.join(nodejs_project_folder, 'generated_pdfs')
+        
+        print(f"📂 Output directory: {output_dir}")
+        
+        # Create directory if doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Generate PDF
+        output_filename = f'facing_sheets_batch_{batch_id}.pdf'
+        output_path = os.path.join(output_dir, output_filename)
+        
+        print(f"📄 Generating PDF at: {output_path}")
+        
+        pdf_path = generate_facing_sheet_pdf(mappings, exam_details, output_path)
+        
+        print(f"✅ PDF saved to: {pdf_path}")
+        
+        return jsonify({
+            'status': 'success',
+            'pdf_path': pdf_path,
+            'total_pages': len(mappings),
+            'batch_id': batch_id
+        })
+        
+    except Exception as e:
+        print(f"\n❌ Error in generate_barcode_facing_sheets:")
+        print(f"   {str(e)}\n")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+        
+        
+@app.route('/api/scan_barcode', methods=['POST'])
+def scan_barcode():
+    """Scan barcode from uploaded facing sheet image"""
+    try:
+        from paper_valuation.api.barcode_scanner import scan_barcode_from_image
+        
+        # Check if file was uploaded
+        if 'image' not in request.files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No image file provided'
+            }), 400
+        
+        file = request.files['image']
+        
+        if file.filename == '':
+            return jsonify({
+                'status': 'error',
+                'message': 'Empty filename'
+            }), 400
+        
+        # Save temporarily
+        import tempfile
+        import os
+        
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, f'facing_sheet_{file.filename}')
+        file.save(temp_path)
+        
+        print(f"\n📋 Scanning barcode from uploaded image...")
+        
+        # Scan barcode
+        result = scan_barcode_from_image(temp_path)
+        
+        # Clean up temp file
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+        
+        if result['success']:
+            return jsonify({
+                'status': 'success',
+                'barcode_id': result['barcode_id'],
+                'barcode_type': result['barcode_type'],
+                'method': result['method']
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': result.get('error', 'Barcode scan failed'),
+                'details': result
+            }), 400
+        
+    except Exception as e:
+        print(f"\n❌ Error in scan_barcode endpoint:")
+        print(f"   {str(e)}\n")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 # ============================================
 # START SERVER
